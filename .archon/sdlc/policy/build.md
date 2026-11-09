@@ -2,7 +2,9 @@
 
 Add project-specific implementation prose above this managed block.
 
-Approved in advance, overriding the managed block's "ask on new dependencies" for these cases only: add a new dependency the issue names without asking, and when the default branch stores nothing yet, create the product's first persisted schema, storing only what the issue asks for, without asking. The merge queue approves the same cases. A later schema change, and any other new dependency, still asks.
+Approved in advance, overriding the managed block's "ask on new dependencies" for these cases only: add a new dependency the issue names without asking, and when the default branch stores nothing yet, create the product's first persisted schema, storing only what the issue asks for, without asking. The merge queue approves the same cases. Any other new dependency still asks.
+
+A later schema change asks once, at merge, not before building. When the issue asks for a change to a schema the default branch already has, build it without asking, as the issue describes, with a migration that keeps existing data. For this case only, that overrides the default build policy's ask on a persisted schema. The merge queue then asks the owner with the reviewed migration in front of them.
 
 The factory's app check proves what needs the running app: `bun run test:live`, screenshots, the design probe, and any acceptance item a build round cannot reach (a round has no Neon check branch). A round finishes when the code is reviewed Ready and CI is green. Do not stop to ask a person to run those: choose `done` and hand the pull request to the merge queue, whose gate will not pass without the app check's green status. A failure the app check reports comes back as work for a later round.
 

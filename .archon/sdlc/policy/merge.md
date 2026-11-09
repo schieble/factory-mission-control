@@ -9,7 +9,7 @@ The owner approves these cases now, so the queue merges them without asking. For
 - **The first schema.** A pull request that creates the product's first persisted schema, with the migration or code that creates it, is clear when the default branch stores nothing yet: no table, migration or schema file, and no code that creates one. Judge that from the default branch, not from the pull request's description. The schema stores only what the pull request's issue asks for. One pull request per sweep can use this: once one first-schema pull request merges, any other that adds a schema is a later schema change.
 - **Dependencies the issue names.** A new dependency the pull request's issue names is clear.
 
-Every later schema change asks: a pull request that changes, extends or migrates a schema the default branch already has is unclear, even when its issue asks for it.
+Every later schema change asks: a pull request that changes, extends or migrates a schema the default branch already has is unclear, even when its issue asks for it. This is the owner's one ask for it, because the build queue builds it without asking. So say in the ask what the migration does to existing data.
 
 <!-- FACTORY AUTONOMY: START (managed by factory-setup) -->
 Preset: standard
