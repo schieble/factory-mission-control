@@ -11,6 +11,13 @@ export interface ModelProfile { provider: string; model: string; effort?: Effort
 export interface ScheduleConfig { interval_seconds: number }
 export interface FactoryConfig {
   project: { repo_host: string; repo_path: string };
+  /**
+   * Our install (AIF-150): where the work items live, when not in the project's own GitHub
+   * issues. A Linear team is `{ host: linear.app, path: <workspace>/<TEAM> }`. Empty means
+   * the project repository. The queues take it as their repo_host/repo_path; the code, its
+   * pull requests and the app check stay in the project repository.
+   */
+  work_items: { host: string; path: string };
   app_check: {
     enabled: boolean;
     trigger: "always" | "frontend" | "never";
@@ -39,6 +46,7 @@ export interface FactoryConfig {
 
 export const DEFAULTS: FactoryConfig = {
   project: { repo_host: "github.com", repo_path: "" },
+  work_items: { host: "", path: "" },
   app_check: {
     enabled: false,
     trigger: "frontend",
@@ -149,10 +157,12 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
   try { parsed = Bun.YAML.parse(raw); }
   catch (error) { throw new Error(`Invalid factory config YAML: ${error instanceof Error ? error.message : String(error)}`); }
   const root = object(parsed ?? {}, "root");
-  exact(root, ["project", "app_check", "protected_paths", "autonomy", "app", "models", "triggers"], "root");
+  exact(root, ["project", "work_items", "app_check", "protected_paths", "autonomy", "app", "models", "triggers"], "root");
 
   const project = section(root, "project");
   exact(project, ["repo_host", "repo_path"], "project");
+  const workItems = section(root, "work_items");
+  exact(workItems, ["host", "path"], "work_items");
   const appCheck = section(root, "app_check");
   exact(appCheck, ["enabled", "trigger", "frontend_paths", "depth"], "app_check");
   const app = section(root, "app");
@@ -166,6 +176,10 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
     project: {
       repo_host: string(project.repo_host, DEFAULTS.project.repo_host, "project.repo_host", false),
       repo_path: string(project.repo_path, DEFAULTS.project.repo_path, "project.repo_path"),
+    },
+    work_items: {
+      host: string(workItems.host, DEFAULTS.work_items.host, "work_items.host"),
+      path: string(workItems.path, DEFAULTS.work_items.path, "work_items.path"),
     },
     app_check: {
       enabled: boolean(appCheck.enabled, DEFAULTS.app_check.enabled, "app_check.enabled"),
@@ -201,6 +215,10 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
     },
   };
 
+  if (Boolean(config.work_items.host.trim()) !== Boolean(config.work_items.path.trim()))
+    fail("work_items", "needs both host and path, or neither");
+  if (config.work_items.path.trim() && !/^[^/\s]+\/[^/\s]+$/.test(config.work_items.path))
+    fail("work_items.path", "must be WORKSPACE/TEAM (Linear) or OWNER/REPO");
   if (!config.app.health_path.startsWith("/")) fail("app.health_path", "must start with /");
   if (config.app_check.enabled && !config.app.start.trim() && !config.app.runtime.trim())
     fail("app.start", "or app.runtime is required when app_check.enabled is true");
@@ -300,9 +318,16 @@ interface TimerDefinition {
   isolation: "default" | "worktree";
 }
 
+/** The queues' repo_host/repo_path: where the work items live (AIF-150). */
+export function workItemInputs(config: FactoryConfig): { repo_host: string; repo_path: string } {
+  return config.work_items.host.trim()
+    ? { repo_host: config.work_items.host.trim(), repo_path: config.work_items.path.trim() }
+    : { repo_host: config.project.repo_host, repo_path: config.project.repo_path };
+}
+
 function triggerDefinitions(config: FactoryConfig): TimerDefinition[] {
   const repo = `${config.project.repo_host}/${config.project.repo_path}`;
-  const inputs = { repo_host: config.project.repo_host, repo_path: config.project.repo_path };
+  const inputs = workItemInputs(config);
   return [
     { key: "build_queue", workflow: "archon-build-queue", binding: "build-queue", resource: `forge:${repo}:build`, overlap: "skip", inputs, isolation: "worktree" },
     { key: "merge_queue", workflow: "archon-merge-queue", binding: "merge-queue", resource: `forge:${repo}:merge`, overlap: "skip", inputs, isolation: "default" },

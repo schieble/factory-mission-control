@@ -16,6 +16,7 @@ attachDatabasePool(pool);
 
 export default createWebhookApp({
   secret: process.env[FUNCTION_ENV.webhookSecret] ?? '',
+  linearSecret: process.env[FUNCTION_ENV.linearWebhookSecret] ?? '',
   db: poolDb(pool),
   factories: factories.factories,
   github: createGitHub(fetch, process.env[FUNCTION_ENV.githubToken] || undefined),

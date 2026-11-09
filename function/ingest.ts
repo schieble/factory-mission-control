@@ -36,6 +36,11 @@ export const METRICS_TITLE = 'Loop metrics';
 export interface Factory {
   name: string;
   repository: string;
+  /**
+   * Our install (AIF-150): `linear.app/<workspace>/<TEAM>` when the factory's work items are in
+   * Linear (./linear.ts). Its GitHub issue deliveries are then ignored: its issues are Linear's.
+   */
+  work_items?: string;
 }
 
 // The fields of GitHub's webhook payloads this module reads, which its REST API returns in the same
@@ -166,10 +171,19 @@ function mirrorWrite(
   repository: Repository,
   factories: Factory[],
 ): Write | null {
-  const factory = factories.find(
+  const followed = factories.find(
     (f) => f.repository.toLowerCase() === repository.full_name.toLowerCase(),
-  )?.name;
+  );
+  const factory = followed?.name;
   if (!factory) return null;
+  // A factory whose work items are in Linear mirrors its issues from Linear (./linear.ts); a
+  // GitHub issue, or a comment on one, would take an issue number Linear's issues use.
+  const linear = Boolean(followed?.work_items);
+  if (linear && event === 'issues') return null;
+  if (linear && event === 'issue_comment') {
+    const { issue } = payload as Payloads['issue_comment'];
+    if (!issue.pull_request) return null;
+  }
 
   switch (event) {
     case 'issues': {

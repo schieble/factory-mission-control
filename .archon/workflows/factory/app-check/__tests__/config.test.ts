@@ -93,6 +93,32 @@ triggers:
     expect(create("example/widgets")).not.toBe(create("example/widgets"));
   });
 
+  test("work items in Linear: the queues take the Linear team, the app check and manager keep the code repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "factory-work-items-test-")), archon = join(root, ".archon");
+    mkdirSync(archon, { recursive: true });
+    const schedules = Object.fromEntries(["build_queue", "merge_queue", "discoveries", "manager", "app_check"].map(key => [key, { interval_seconds: 600 }]));
+    writeFileSync(join(archon, "factory.yaml"), Bun.YAML.stringify({
+      project: { repo_host: "github.com", repo_path: "schieble/snip" },
+      work_items: { host: "linear.app", path: "wrkr/SNIP" },
+      triggers: { enabled: true, host_id: "test-host", run_as_user_id: "e58d38eaf1528395ba6abc0da3967127", ...schedules },
+    }));
+    applyFactoryConfig(root);
+    const inputs = (binding: string) => JSON.parse(readFileSync(join(archon, "triggers", `${binding}.json`), "utf8")).binding.launch.inputs;
+    for (const binding of ["build-queue", "merge-queue", "discoveries"]) {
+      expect(inputs(binding)).toEqual({ repo_host: "linear.app", repo_path: "wrkr/SNIP" });
+    }
+    expect(inputs("factory-app-check")).toEqual({ repo_path: "schieble/snip" });
+    expect(inputs("factory-manager")).toEqual({ repo_path: "schieble/snip" });
+  });
+
+  test("work items default to the project repository, and need both host and path", () => {
+    const config = parseFactoryConfig("project: { repo_host: github.com, repo_path: example/widgets }\n");
+    expect(config.work_items).toEqual({ host: "", path: "" });
+    expect(() => parseFactoryConfig("work_items: { host: linear.app }\n")).toThrow("both host and path");
+    expect(() => parseFactoryConfig("work_items: { host: linear.app, path: SNIP }\n")).toThrow("WORKSPACE/TEAM");
+    expect(() => parseFactoryConfig("work_items: { team: SNIP }\n")).toThrow("unknown setting");
+  });
+
   test("presets differ while managed replacement preserves surrounding prose", () => {
     const original = "# Team policy\n\nBefore text.\n\nAfter text.\n";
     const rendered = (["supervised", "standard", "autonomous"] as const).map(preset => replaceManagedPolicy(original, preset, "merge"));

@@ -1,11 +1,15 @@
 import { Hono } from 'hono';
 import type { Db } from '../scripts/lib/db';
 import { type Context, DECISIONS_PATH, PACK_PATH, prepare, type Write } from './ingest';
+import { fresh, type LinearDelivery, linearWrite, verifyLinear } from './linear';
 import { verify } from './signature';
 
 export interface WebhookOptions extends Context {
   secret: string;
   db: Db;
+  /** Our install (AIF-150): Linear's signing secret; empty answers /linear with 404. */
+  linearSecret?: string;
+  now?: () => number;
 }
 
 // Bun SQL and a reset socket name a dropped connection by code; node-postgres only in its message.
@@ -61,9 +65,35 @@ async function writeDelivery(db: Db, write: Write, delivery: string): Promise<vo
 }
 
 /** One route: GitHub's POST of a delivery. A delivery whose signature fails writes nothing. */
-export function createWebhookApp({ secret, db, ...context }: WebhookOptions): Hono {
+export function createWebhookApp({
+  secret,
+  db,
+  linearSecret = '',
+  now = Date.now,
+  ...context
+}: WebhookOptions): Hono {
   if (!secret) throw new Error('GITHUB_WEBHOOK_SECRET must be set');
   const app = new Hono();
+
+  // Our install (AIF-150): Linear's POST of a delivery, for factories tracked in Linear.
+  app.post('/linear', async (c) => {
+    if (!linearSecret) return c.json({ error: 'no Linear webhook is configured' }, 404);
+    const body = new Uint8Array(await c.req.arrayBuffer());
+    if (!(await verifyLinear(linearSecret, body, c.req.header('linear-signature')))) {
+      return c.json({ error: 'signature does not match' }, 401);
+    }
+    let delivery: LinearDelivery;
+    try {
+      delivery = JSON.parse(new TextDecoder().decode(body)) as LinearDelivery;
+    } catch {
+      return c.json({ error: 'the body is not JSON' }, 400);
+    }
+    if (!fresh(delivery, now())) return c.json({ error: 'the delivery is too old' }, 401);
+    const write = linearWrite(delivery, context.factories);
+    const name = `linear ${delivery.type} ${delivery.action} ${c.req.header('linear-delivery') ?? ''}`;
+    if (write) await writeDelivery(db, write, name);
+    return c.json({ event: `linear ${delivery.type}`, written: write !== null });
+  });
 
   app.post('/', async (c) => {
     const body = new Uint8Array(await c.req.arrayBuffer());

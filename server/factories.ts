@@ -7,6 +7,8 @@ export type FactoryEntry = {
   repository: string;
   codebase: string;
   console: string;
+  /** Our install (AIF-150): `linear.app/<workspace>/<TEAM>` for a factory tracked in Linear. */
+  work_items?: string;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -51,5 +53,6 @@ export function readFactories(env: Env, repoRoot: string): FactoryEntry[] {
     repository: stringField(entry, 'repository', index),
     codebase: stringField(entry, 'codebase', index),
     console: stringField(entry, 'console', index),
+    ...(typeof entry.work_items === 'string' ? { work_items: entry.work_items } : {}),
   }));
 }

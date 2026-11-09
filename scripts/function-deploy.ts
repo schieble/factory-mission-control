@@ -46,6 +46,8 @@ async function deploy(deps: Deps, { api, branch, projectId }: Target): Promise<v
   }
   // Sent even when empty: neonctl keeps any key a deploy leaves out from the one before.
   const token = deps.env[FUNCTION_ENV.githubToken] ?? '';
+  // Our install (AIF-150): Linear's signing secret, sent even when empty like the token.
+  const linearSecret = deps.env[FUNCTION_ENV.linearWebhookSecret] ?? '';
   const url = await api.pooledConnectionUri(branch.id);
   const result = await deps.neonctl([
     'functions',
@@ -65,11 +67,13 @@ async function deploy(deps: Deps, { api, branch, projectId }: Target): Promise<v
     `${FUNCTION_ENV.webhookSecret}=${secret}`,
     '--env',
     `${FUNCTION_ENV.githubToken}=${token}`,
+    '--env',
+    `${FUNCTION_ENV.linearWebhookSecret}=${linearSecret}`,
     '--output',
     'json',
   ]);
   if (result.code !== 0) {
-    const secrets = [url, new URL(url).password, secret, token];
+    const secrets = [url, new URL(url).password, secret, token, linearSecret];
     throw new Error(`neonctl functions deploy failed: ${redacted(result.stderr.trim(), secrets)}`);
   }
   let invocationUrl: unknown;

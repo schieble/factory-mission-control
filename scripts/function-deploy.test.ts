@@ -14,6 +14,7 @@ const BRANCHES = [
 const SECRETS = {
   [FUNCTION_ENV.webhookSecret]: 'whsec-test',
   [FUNCTION_ENV.githubToken]: 'ghp-test',
+  [FUNCTION_ENV.linearWebhookSecret]: 'lin-test',
 };
 
 function run(
@@ -48,12 +49,16 @@ const deployArgs = (repoRoot: string, branchId: string) => [
   `${FUNCTION_ENV.webhookSecret}=whsec-test`,
   '--env',
   `${FUNCTION_ENV.githubToken}=ghp-test`,
+  '--env',
+  `${FUNCTION_ENV.linearWebhookSecret}=lin-test`,
   '--output',
   'json',
 ];
 
 const leaks = (lines: string[]) =>
-  lines.filter((line) => ['whsec-test', 'ghp-test', 'pooled-pw'].some((s) => line.includes(s)));
+  lines.filter((line) =>
+    ['whsec-test', 'ghp-test', 'lin-test', 'pooled-pw'].some((s) => line.includes(s)),
+  );
 
 test('deploys to a check branch with its pooled URL and prints only the URL', async () => {
   const { repoRoot, recorder, exit } = run(['--branch', 'check-abc']);
