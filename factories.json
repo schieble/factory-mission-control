@@ -10,7 +10,8 @@
       "name": "snip-t3",
       "repository": "schieble/snip-t3",
       "codebase": "schieble/snip-t3",
-      "console": "http://localhost:3090"
+      "console": "http://localhost:3090",
+      "work_items": "linear.app/wrkr/SNIP"
     }
   ]
 }
