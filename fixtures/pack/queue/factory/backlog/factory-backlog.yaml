@@ -26,14 +26,25 @@ nodes:
       type: object
       properties: { count: { type: integer }, summary: { type: string } }
       required: [count, summary]
+  # Our install (AIF-153): list the behaviours the PRD implies; check merges them into Acceptance.
+  - id: edge-cases
+    command: edge-cases
+    depends_on: [slice]
+    model: ['@factory-planner', large]
+    mutates_checkout: false
+    with: { prd: "$read.output.path" }
+    output_format:
+      type: object
+      properties: { count: { type: integer }, summary: { type: string } }
+      required: [count, summary]
   - id: check
     script: check
     runtime: bun
-    depends_on: [slice]
+    depends_on: [edge-cases]
     output_format:
       type: object
-      properties: { count: { type: integer }, keys: { type: array, items: { type: string } } }
-      required: [count, keys]
+      properties: { count: { type: integer }, keys: { type: array, items: { type: string } }, edge_cases: { type: integer } }
+      required: [count, keys, edge_cases]
   - id: publish
     script: publish
     runtime: bun

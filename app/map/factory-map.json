@@ -28,7 +28,7 @@
         },
         {
           "workflow": "factory-backlog",
-          "steps": ["read", "slice", "check", "publish"],
+          "steps": ["read", "slice", "edge-cases", "check", "publish"],
           "pack": "queue"
         }
       ],
@@ -1426,7 +1426,7 @@
             {
               "pack": "queue",
               "workflow": "factory-backlog",
-              "steps": ["slice", "check"]
+              "steps": ["slice", "edge-cases", "check"]
             },
             {
               "pack": "loop",
