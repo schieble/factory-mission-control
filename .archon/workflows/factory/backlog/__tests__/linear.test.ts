@@ -66,3 +66,14 @@ describe("factory-backlog in a Linear project", () => {
     expect(requests()).toEqual([{ op: "workitem.view", request: { ref: { repo: { host: "linear.app", path: "wrkr/SNIP" }, number: 5 } } }]);
   });
 });
+
+describe("the Linear issue a pull request links", () => {
+  test("is found by a closing or referencing keyword before the team's key, and only that team's", async () => {
+    const { linkedLinearIssue } = await import("../../.shared/work-items.ts");
+    const items = { host: "linear.app", path: "wrkr/SNIP" };
+    expect(linkedLinearIssue(items, "Shortens links.\n\nCloses SNIP-12")).toBe(12);
+    expect(linkedLinearIssue(items, "Refs snip-3")).toBe(3);
+    expect(linkedLinearIssue(items, "Closes AIF-12")).toBeNull();
+    expect(linkedLinearIssue(items, "Closes #12")).toBeNull();
+  });
+});

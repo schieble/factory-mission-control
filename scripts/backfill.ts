@@ -37,6 +37,11 @@ interface FactoryHistory {
   pullRequests: PullRequest[];
   /** When each open issue labelled `NEEDS_OWNER` last received that label, where GitHub says. */
   labelled: { issue: number; at: string }[];
+  /**
+   * Our install (AIF-150): the factory's issues are Linear's, mirrored by the Linear webhook. Its
+   * GitHub issues are neither written nor used to prune the mirror, which would delete them.
+   */
+  linearIssues: boolean;
 }
 
 export interface History {
@@ -70,10 +75,13 @@ interface ListedCommit {
 
 export async function readHistory(github: GitHub, followed: Factory[]): Promise<History> {
   const read: FactoryHistory[] = [];
-  for (const { name, repository } of followed) {
+  for (const { name, repository, work_items } of followed) {
+    const linearIssues = Boolean(work_items);
     const listed = await github.list<Issue>(`/repos/${repository}/issues?state=all&per_page=100`);
-    const byNumber = new Map(listed.map((issue) => [issue.number, issue]));
-    const issues = listed.filter((issue) => !issue.pull_request);
+    // A Linear factory keeps only its pull requests' entries: their comments are still GitHub's.
+    const kept = linearIssues ? listed.filter((issue) => issue.pull_request) : listed;
+    const byNumber = new Map(kept.map((issue) => [issue.number, issue]));
+    const issues = kept.filter((issue) => !issue.pull_request);
     const comments = await github.list<ListedComment>(
       `/repos/${repository}/issues/comments?per_page=100`,
     );
@@ -97,6 +105,7 @@ export async function readHistory(github: GitHub, followed: Factory[]): Promise<
         `/repos/${repository}/pulls?state=all&per_page=100`,
       ),
       labelled,
+      linearIssues,
     });
   }
 
@@ -172,7 +181,14 @@ export async function inBatches<T>(
  */
 export async function storeHistory(db: Db, history: History, readAt?: string): Promise<Removed> {
   const removed: Removed = { issues: 0, comments: 0 };
-  for (const { factory, issues, comments, pullRequests, labelled } of history.factories) {
+  for (const {
+    factory,
+    issues,
+    comments,
+    pullRequests,
+    labelled,
+    linearIssues,
+  } of history.factories) {
     await inBatches(db, issues, (tx, issue) => writeIssue(tx, factory, issue));
     await inBatches(db, labelled, (tx, { issue, at }) =>
       writeLabeledAt(tx, factory, issue, NEEDS_OWNER, at),
@@ -184,11 +200,14 @@ export async function storeHistory(db: Db, history: History, readAt?: string): P
     if (readAt === undefined) continue;
 
     // Read outside a transaction; each removal re-checks nothing, it is an idempotent delete.
-    const goneIssues = await db.query(
-      `SELECT number FROM mc.issues WHERE factory = $1 AND created_at < $3
+    // Our install (AIF-150): a Linear factory's issues are not on GitHub, so none is pruned.
+    const goneIssues = linearIssues
+      ? []
+      : await db.query(
+          `SELECT number FROM mc.issues WHERE factory = $1 AND created_at < $3
         AND number NOT IN (SELECT v::integer FROM jsonb_array_elements_text($2::jsonb) v)`,
-      [factory, issues.map((issue) => issue.number), readAt],
-    );
+          [factory, issues.map((issue) => issue.number), readAt],
+        );
     await inBatches(db, goneIssues, (tx, { number }) =>
       removeIssue(tx, factory, Number(number), readAt),
     );

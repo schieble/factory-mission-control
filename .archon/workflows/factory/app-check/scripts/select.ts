@@ -1,4 +1,5 @@
 import { emit, env, ghJson, linkedIssue } from "../../.shared/utils.ts";
+import { isLinear, linkedLinearIssue, viewLinearIssue, workItems } from "../../.shared/work-items.ts";
 import { currentBranchOid } from "./base.ts";
 import { statusJudgesHead, type CommitStatus } from "./binding.ts";
 
@@ -30,8 +31,13 @@ if (import.meta.main) {
   const picked = requested ? (rows[0]?.state === "OPEN" ? rows[0] : null) : oldestUnchecked(rows, judged);
   if (!picked) emit({ found: false, pr: null, head: "", files: [], base: "", base_oid: "", issue: null, issue_body: "", issue_labels: [] });
   else {
-    const issue = linkedIssue(picked.body);
-    const detail = issue ? ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body,labels"]) : null;
+    // Our install (AIF-150): in a Linear project the linked issue is a Linear issue.
+    const items = workItems();
+    const linear = isLinear(items);
+    const issue = linear ? linkedLinearIssue(items, picked.body) : linkedIssue(picked.body);
+    const detail = !issue ? null
+      : linear ? (({ body, labels }) => ({ body, labels: labels.map(name => ({ name })) }))(viewLinearIssue(items, issue))
+      : ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body,labels"]);
     emit({ found: true, pr: picked.number, head: picked.headRefOid, files: picked.files.map(file => file.path), base: picked.baseRefName, base_oid: picked.baseRefOid, issue,
       issue_body: detail?.body ?? "", issue_labels: (detail?.labels ?? []).map((label: { name: string }) => label.name) });
   }

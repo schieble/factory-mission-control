@@ -82,7 +82,9 @@ How this repository is built. The product is `docs/mission-control.prd.md`; this
 - `bun run function:deploy -- --branch <check-*|main>` bundles `function/index.ts` with neonctl
   (pinned in devDependencies), deploys it as the Neon Function `mcwebhook` (runtime nodejs24) on
   that branch, and prints its URL. It needs `NEON_API_KEY`, `NEON_PROJECT_ID` and
-  `GITHUB_WEBHOOK_SECRET`; `GITHUB_TOKEN` is optional and only raises GitHub's rate limit. It sets
+  `GITHUB_WEBHOOK_SECRET`; `GITHUB_TOKEN` is optional and only raises GitHub's rate limit.
+  `LINEAR_WEBHOOK_SECRET` (our install, AIF-150) is optional: set, the Function also serves
+  `POST /linear` for factories whose `factories.json` entry names `work_items`. It sets
   the Function's `MC_DATABASE_URL` to that branch's pooled connection string, so the Function
   writes only the branch it runs on. It refuses every branch but `check-*` and `main`; `main` is
   the owner's step after merge (PRD 11.3). It prints no secret, though they sit in neonctl's
@@ -98,5 +100,11 @@ How this repository is built. The product is `docs/mission-control.prd.md`; this
   deploy used. SSL verification on. Events, under "Let me select individual events": Issues, Issue
   comments, Pull requests, Pushes, Labels. "Recent Deliveries" shows each answer: 200 recorded,
   401 the secret differs, 400 the content type is not JSON.
+- Registering the Linear webhook (our install, AIF-150; once per team, after deploying with
+  `LINEAR_WEBHOOK_SECRET`): in Linear, Settings, API, Webhooks, New webhook. URL: the printed URL
+  with `/linear` appended. Team: the factory's team. Data change events: Issues. Signing secret:
+  the `LINEAR_WEBHOOK_SECRET` the deploy used. A delivery older than a minute is refused, so
+  Linear's retries of a long-failed delivery are refused too; the next change to the issue
+  mirrors it again.
 
 See [factory workflow policy](factory/WORKFLOW_POLICY.md) for factory-specific shared-workflow requirements.

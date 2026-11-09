@@ -400,6 +400,7 @@ test('a history larger than one batch is written in several transactions, rows u
         comments: [],
         pullRequests: [],
         labelled: [],
+        linearIssues: false,
       },
     ],
     commits: [],
