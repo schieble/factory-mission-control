@@ -200,9 +200,13 @@ export async function storeHistory(db: Db, history: History, readAt?: string): P
     if (readAt === undefined) continue;
 
     // Read outside a transaction; each removal re-checks nothing, it is an idempotent delete.
-    // Our install (AIF-150): a Linear factory's issues are not on GitHub, so none is pruned.
+    // Our install (AIF-150): a Linear factory's issues are not on GitHub, so only rows that are
+    // not Linear issues are pruned: the GitHub issues it had before it moved to Linear.
     const goneIssues = linearIssues
-      ? []
+      ? await db.query(
+          `SELECT number FROM mc.issues WHERE factory = $1 AND url NOT LIKE 'https://linear.app/%'`,
+          [factory],
+        )
       : await db.query(
           `SELECT number FROM mc.issues WHERE factory = $1 AND created_at < $3
         AND number NOT IN (SELECT v::integer FROM jsonb_array_elements_text($2::jsonb) v)`,

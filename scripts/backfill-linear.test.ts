@@ -38,10 +38,11 @@ const github = {
   fileAt: async () => '# Decisions\n',
 } as unknown as GitHub;
 
-test("a Linear factory's GitHub issues are not written, and its Linear-mirrored issues are not pruned", async () => {
+test("a Linear factory's GitHub issues are not written, its Linear issues stay, and its old GitHub rows go", async () => {
   await db.query(
     `INSERT INTO mc.issues (factory, number, title, state, url, created_at, updated_at)
-      VALUES ('snip', 7, 'From Linear', 'open', 'https://linear.app/wrkr/issue/SNIP-7', $1, $1)`,
+      VALUES ('snip', 7, 'From Linear', 'open', 'https://linear.app/wrkr/issue/SNIP-7', $1, $1),
+             ('snip', 2, 'From GitHub, before the move', 'open', 'https://github.com/schieble/snip/issues/2', $1, $1)`,
     [AT],
   );
   const history = await readHistory(github, [
