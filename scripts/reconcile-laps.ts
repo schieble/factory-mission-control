@@ -11,9 +11,12 @@
 // differs from the lap's rows. A running run with a lap has only its step events replayed, and
 // only its step and attempt rows compared. A run
 // projected before versions were (0008, issue #74) differs by its missing version, so this writes
-// that too, and a finish lost to a locked lap (issue #152) differs by its status. Archon's tables
-// are only read. It writes the check branch in .mc-check.env; `:main` writes `main`, and is the
-// owner's scheduled run beside `reconcile:main`.
+// that too, and a finish lost to a locked lap (issue #152) differs by its status. A run whose Archon
+// rows and lap rows are unchanged since a check found them agreeing is not replayed again, a run
+// whose repair failed is parked under a backoff, and one tick replays at most MAX_REPLAYS runs on
+// connections it renews every REPLAYS_PER_CONNECTION replays (AIF-160, mc.lap_reconcile_checks).
+// Archon's tables are only read. It writes the check branch in .mc-check.env; `:main` writes
+// `main`, and is the owner's scheduled run beside `reconcile:main`.
 
 import { parseArgs } from 'node:util';
 import { failing, guardedDatabaseUrl, type Main, runCli } from './lib/cli';
@@ -67,21 +70,43 @@ type Scope = 'run' | 'steps';
  * them, its version's included; in the `steps` scope only the step and attempt rows the lane reads.
  */
 async function lapRows(tx: Tx, runId: string, scope: Scope): Promise<string> {
-  const stepRows = `SELECT 'lap_steps' AS t, to_jsonb(s)::text AS row FROM mc.lap_steps s
-       WHERE run_id = $1
-     UNION ALL SELECT 'lap_step_attempts', to_jsonb(a)::text FROM mc.lap_step_attempts a
-       WHERE run_id = $1`;
-  const otherRows = `UNION ALL SELECT 'laps', to_jsonb(l)::text FROM mc.laps l WHERE run_id = $1
-     UNION ALL SELECT 'lap_step_attempt_usage', to_jsonb(u)::text FROM mc.lap_step_attempt_usage u
-       WHERE run_id = $1
-     UNION ALL SELECT 'app_check_lines', to_jsonb(a)::text FROM mc.app_check_lines a WHERE run_id = $1
-     UNION ALL SELECT 'versions', to_jsonb(v)::text FROM mc.versions v
-       JOIN mc.laps l ON l.factory = v.factory AND l.digest = v.digest WHERE l.run_id = $1`;
-  const rows = await tx.query(`${stepRows} ${scope === 'run' ? otherRows : ''} ORDER BY 1, 2`, [
-    runId,
-  ]);
+  const rows = await tx.query(`${lapRowsSql('$1', scope)} ORDER BY 1, 2`, [runId]);
   return JSON.stringify(rows);
 }
+
+/** `lapRows`'s rows, unordered, as `(t, row)`, for the run whose id is the SQL expression `run`. */
+function lapRowsSql(run: string, scope: Scope): string {
+  const stepRows = `SELECT 'lap_steps' AS t, to_jsonb(s)::text AS row FROM mc.lap_steps s
+       WHERE s.run_id = ${run}
+     UNION ALL SELECT 'lap_step_attempts', to_jsonb(a)::text FROM mc.lap_step_attempts a
+       WHERE a.run_id = ${run}`;
+  const otherRows = `UNION ALL SELECT 'laps', to_jsonb(l)::text FROM mc.laps l WHERE l.run_id = ${run}
+     UNION ALL SELECT 'lap_step_attempt_usage', to_jsonb(u)::text FROM mc.lap_step_attempt_usage u
+       WHERE u.run_id = ${run}
+     UNION ALL SELECT 'app_check_lines', to_jsonb(a)::text FROM mc.app_check_lines a
+       WHERE a.run_id = ${run}
+     UNION ALL SELECT 'versions', to_jsonb(v)::text FROM mc.versions v
+       JOIN mc.laps l ON l.factory = v.factory AND l.digest = v.digest WHERE l.run_id = ${run}`;
+  return `${stepRows} ${scope === 'run' ? otherRows : ''}`;
+}
+
+/**
+ * Fingerprints of a run (AIF-160): `sourceFingerprint`, for the Archon run row aliased `r`, of
+ * Archon's rows the projection reads (the run row, but for the activity time Archon bumps while it
+ * works; the count and latest time of its step-level events, which Archon only appends; and the
+ * name of its codebase), and `lapFingerprint`, for a run id, of every row the projection writes for
+ * it. Neither changes unless a write does, so a run whose fingerprints match a clean check needs no
+ * replay: a dropped projection follows an Archon write. The projection's own tables (mc.factories,
+ * mc.pins) are kept by the commands that write them, which re-project what they change.
+ */
+const sourceFingerprint = (r: string) => `md5((to_jsonb(${r}) - 'last_activity_at')::text || (
+    SELECT jsonb_build_array(count(*), max(e.created_at),
+        (SELECT c.name FROM public.remote_agent_codebases c WHERE c.id = ${r}.codebase_id))::text
+      FROM public.remote_agent_workflow_events e
+     WHERE e.workflow_run_id = ${r}.id AND e.event_type IN ${sqlList(STEP_EVENT_TYPES)}))`;
+const lapFingerprint = (run: string) =>
+  `md5(coalesce((SELECT string_agg(x.t || ' ' || x.row, E'\\n' ORDER BY x.t, x.row)
+    FROM (${lapRowsSql(run, 'run')}) x), ''))`;
 
 /**
  * Replaces the run's rows with what the projection writes from Archon's rows today. Throws `Agrees`
@@ -214,21 +239,63 @@ type Reconciled = {
   live: number;
   /** Each run whose repair rolled back on an error, with that error's message. */
   failed: { runId: string; message: string }[];
+  /** Runs whose last repair failed, left alone until a backoff ends or they change (AIF-160). */
+  parked: number;
+  /** Runs that need a replay past this tick's limit, left to the next tick. */
+  deferred: number;
+};
+
+/**
+ * How many runs one tick replays at most, so a backlog, such as every run on the first tick after
+ * the checks table was added, spreads over several ticks (AIF-160).
+ */
+export const MAX_REPLAYS = 300;
+/**
+ * How many replays share one connection. Each replay creates two triggers, and Postgres keeps a
+ * compiled copy of a PL/pgSQL trigger function, with its plans, per trigger for the life of the
+ * session, about 420 kB a replay here: a session that replayed every run of a 1,600-run store held
+ * hundreds of megabytes and ran a 0.25 CU compute out of memory (AIF-160). A fresh connection
+ * every few replays frees them.
+ */
+export const REPLAYS_PER_CONNECTION = 25;
+
+const nothingDone = (): Reconciled => ({
+  repaired: 0,
+  busy: 0,
+  live: 0,
+  failed: [],
+  parked: 0,
+  deferred: 0,
+});
+
+/** A run the candidate read found, with its fingerprints and its last check's. */
+type Candidate = {
+  id: string;
+  live: boolean;
+  source: string;
+  lap: string;
+  /** Both fingerprints are as the run's last check recorded them. */
+  unchanged: boolean;
+  /** Failed repairs in a row, and when the run may be tried again. */
+  failures: number;
+  retryAt: Date | null;
 };
 
 /**
  * Re-projects every Archon run that is not running whose lap rows differ from what its rows project
  * to, every running run that has no lap at all, and the step and attempt rows of every running run
  * whose lap still lacks a step write a live trigger lost; counts the running runs whose lap shows another
- * status, which it leaves to their live triggers.
+ * status, which it leaves to their live triggers. A run whose Archon rows and lap rows are both as a
+ * clean check left them is not replayed (AIF-160).
  */
-export async function reconcileLaps(db: Db): Promise<Reconciled> {
-  const runs = await db.query(
-    `SELECT id, status IN ${sqlList(LIVE)} AS live FROM public.remote_agent_workflow_runs
-      ORDER BY started_at, id`,
-    [],
-  );
-  const finished = runs.filter((run) => !run.live);
+export async function reconcileLaps(
+  db: Db,
+  {
+    now = new Date(),
+    maxReplays = MAX_REPLAYS,
+    replaysPerConnection = REPLAYS_PER_CONNECTION,
+  }: { now?: Date; maxReplays?: number; replaysPerConnection?: number } = {},
+): Promise<Reconciled> {
   // Only read, so no live trigger waits on it: a replay would lock the rows Archon's next write
   // projects to. A running run is the exception when its projection lost a write to a locked
   // table: with no lap its insert lost a locked mc.laps (#269), and no trigger projects it again
@@ -240,11 +307,29 @@ export async function reconcileLaps(db: Db): Promise<Reconciled> {
   // next step write wait on a healthy run. Its step and attempt rows are then replayed and
   // compared; its lap's status is left to its live triggers. The read waits at most REPLAY_LOCK_TIMEOUT
   // too: when mc.laps is locked (#221) every run, running or not, is busy.
+  let candidates: Candidate[] = [];
   let running: Row[] = [];
   let live: Row | undefined;
   try {
     await db.transaction(async (tx) => {
       await tx.query(`SET LOCAL lock_timeout = '${REPLAY_LOCK_TIMEOUT}'`, []);
+      const rows = await tx.query(
+        `SELECT r.id, r.status IN ${sqlList(LIVE)} AS live, ${sourceFingerprint('r')} AS source, ${lapFingerprint('r.id')} AS lap,
+                c.source AS checked_source, c.lap AS checked_lap, c.failures, c.retry_at
+           FROM public.remote_agent_workflow_runs r
+           LEFT JOIN mc.lap_reconcile_checks c ON c.run_id = r.id
+          ORDER BY r.started_at, r.id`,
+        [],
+      );
+      candidates = rows.map((row) => ({
+        id: String(row.id),
+        live: Boolean(row.live),
+        source: String(row.source),
+        lap: String(row.lap),
+        unchanged: row.checked_source === row.source && row.checked_lap === row.lap,
+        failures: Number(row.failures ?? 0),
+        retryAt: row.retry_at ? new Date(String(row.retry_at)) : null,
+      }));
       running = await tx.query(
         `SELECT r.id, l.run_id IS NULL AS unprojected FROM public.remote_agent_workflow_runs r
            LEFT JOIN mc.laps l ON l.run_id = r.id
@@ -261,32 +346,97 @@ export async function reconcileLaps(db: Db): Promise<Reconciled> {
     });
   } catch (error) {
     if (!lostLockWait(error)) throw error;
-    return { repaired: 0, busy: runs.length, live: 0, failed: [] };
+    const [all] = await db.query(
+      'SELECT count(*)::int AS n FROM public.remote_agent_workflow_runs',
+      [],
+    );
+    return { ...nothingDone(), busy: Number(all?.n ?? 0) };
   }
-  const result: Reconciled = { repaired: 0, busy: 0, live: Number(live?.n ?? 0), failed: [] };
-  const work: { id: unknown; scope: Scope }[] = [
-    ...finished.map(({ id }) => ({ id, scope: 'run' as const })),
-    ...running.map(({ id, unprojected }) => ({
-      id,
-      scope: unprojected ? ('run' as const) : ('steps' as const),
-    })),
-  ];
-  for (const { id, scope } of work) {
-    const runId = String(id);
+  const result: Reconciled = { ...nothingDone(), live: Number(live?.n ?? 0) };
+  const scopes = new Map(
+    running.map(({ id, unprojected }) => [String(id), unprojected ? 'run' : 'steps'] as const),
+  );
+  const work: { run: Candidate; scope: Scope }[] = [];
+  for (const run of candidates) {
+    const scope = run.live ? scopes.get(run.id) : 'run';
+    if (!scope || (run.unchanged && run.failures === 0)) continue;
+    if (run.unchanged && run.retryAt && run.retryAt > now) result.parked++;
+    else work.push({ run, scope });
+  }
+  result.deferred = Math.max(0, work.length - maxReplays);
+  let onConnection = 0;
+  for (const { run, scope } of work.slice(0, maxReplays)) {
+    // Each replay's triggers leave a compiled copy of the projection functions in the session.
+    if (onConnection++ === replaysPerConnection) {
+      await db.dropIdleConnections?.();
+      onConnection = 1;
+    }
     try {
-      await db.transaction((tx) => reproject(tx, runId, scope));
+      await db.transaction((tx) => reproject(tx, run.id, scope));
       result.repaired++;
     } catch (error) {
-      if (error instanceof Busy || lostLockWait(error)) result.busy++;
-      else if (!(error instanceof Agrees)) {
-        result.failed.push({
-          runId,
-          message: error instanceof Error ? error.message : String(error),
-        });
+      if (error instanceof Busy || lostLockWait(error)) {
+        result.busy++;
+        continue;
+      }
+      if (!(error instanceof Agrees)) {
+        const message = error instanceof Error ? error.message : String(error);
+        result.failed.push({ runId: run.id, message });
+        await recordCheck(db, run, now, { failures: run.failures + 1, error: message });
+        continue;
       }
     }
+    await recordCheck(db, run, now);
   }
+  // Runs Archon deleted take their checks with them.
+  await db
+    .query(
+      `DELETE FROM mc.lap_reconcile_checks c WHERE NOT EXISTS (
+         SELECT 1 FROM public.remote_agent_workflow_runs r WHERE r.id = c.run_id)`,
+      [],
+    )
+    .catch(() => {});
   return result;
+}
+
+/** The wait after a run's first failed repair, doubled for each further one up to RETRY_MAX_MS. */
+export const RETRY_BASE_MS = 20 * 60_000;
+const RETRY_MAX_MS = 24 * 60 * 60_000;
+
+/**
+ * Records a check of `run`: its Archon rows' fingerprint as the candidate read took it, so an
+ * Archon write since then makes it a candidate again, and its lap rows' as they are now. A failed
+ * check parks the run until a backoff that doubles with each failure in a row ends.
+ */
+async function recordCheck(
+  db: Db,
+  run: Candidate,
+  now: Date,
+  failed?: { failures: number; error: string },
+): Promise<void> {
+  // A check that is not recorded only costs the run a replay on the next tick, so losing one never
+  // ends the tick or hides what it has to report.
+  const retryAt = failed
+    ? new Date(now.getTime() + Math.min(RETRY_BASE_MS * 2 ** (failed.failures - 1), RETRY_MAX_MS))
+    : null;
+  await db
+    .query(
+      `INSERT INTO mc.lap_reconcile_checks AS c
+       (run_id, source, lap, checked_at, failures, retry_at, error)
+     VALUES ($1, $2, ${lapFingerprint('$1::uuid')}, $3, $4, $5, $6)
+     ON CONFLICT (run_id) DO UPDATE SET source = excluded.source, lap = excluded.lap,
+       checked_at = excluded.checked_at, failures = excluded.failures,
+       retry_at = excluded.retry_at, error = excluded.error`,
+      [
+        run.id,
+        run.source,
+        now.toISOString(),
+        failed?.failures ?? 0,
+        retryAt?.toISOString() ?? null,
+        failed?.error ?? null,
+      ],
+    )
+    .catch(() => {});
 }
 
 const USAGE =
@@ -312,9 +462,18 @@ export const main: Main = async (argv, deps) => {
     const url = await guardedDatabaseUrl(deps, values.main ? 'main' : 'check');
     const db = deps.openDb(url);
     try {
-      const { repaired, busy, live, failed } = await reconcileLaps(db);
+      const { repaired, busy, live, failed, parked, deferred } = await reconcileLaps(db, {
+        now: deps.now(),
+      });
       deps.out(`reconcile: ${repaired} run(s) repaired`);
       if (busy > 0) deps.out(`reconcile: ${busy} run(s) busy, left for the next run`);
+      if (deferred > 0)
+        deps.out(`reconcile: ${deferred} run(s) past this run's limit, left for the next run`);
+      if (parked > 0) {
+        deps.out(
+          `reconcile: ${parked} run(s) parked after a failed repair, until a backoff ends or they change`,
+        );
+      }
       if (live > 0) {
         deps.out(`reconcile: ${live} run(s) differ but are still running, left to live triggers`);
       }

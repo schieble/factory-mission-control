@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { rmSync } from 'node:fs';
-import { archonDb, migrationFiles, snapshot } from '../db/test-db';
+import { archonDb, snapshot as everyTable, migrationFiles } from '../db/test-db';
 import { eventData } from './fixture/write';
 import type { Db, Row, Tx } from './lib/db';
 import { DATABASE_URL, NOW, recordingDeps, scratchRepo } from './lib/test-deps';
 import { runMigrations } from './migrate';
-import { main, REPLAY_LOCK_TIMEOUT, STEP_EVENT_TYPES } from './reconcile-laps';
+import { main, REPLAY_LOCK_TIMEOUT, reconcileLaps, STEP_EVENT_TYPES } from './reconcile-laps';
 
 let db: Db;
 let sql: string[];
@@ -29,6 +29,7 @@ async function run(
   argv: string[],
   branchName = 'check-abc',
   after?: (text: string, tx: Tx) => Promise<void>,
+  now = NOW,
 ) {
   const repoRoot = scratchRepo({ MC_DATABASE_URL: DATABASE_URL });
   scratch.push(repoRoot);
@@ -43,6 +44,7 @@ async function run(
   });
   const deps = {
     ...recorder.deps,
+    now: () => now,
     openDb: (url: string): Db => {
       recorder.opened.push(url);
       return {
@@ -56,6 +58,12 @@ async function run(
 }
 
 const rows = (text: string, params: unknown[] = []): Promise<Row[]> => db.query(text, params);
+
+/** Every mc table but the command's own record of its checks, which each run writes (AIF-160). */
+async function snapshot(on: Db): Promise<Record<string, string[]>> {
+  const { lap_reconcile_checks: _checks, ...tables } = await everyTable(on);
+  return tables;
+}
 
 async function archonRun(status: string): Promise<string> {
   const [run] = await rows(
@@ -167,6 +175,59 @@ test('a dropped projection is repaired once, an agreeing lap is left alone, and 
       /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(public\.)?remote_agent_/i.test(text),
     ),
   ).toEqual([]);
+});
+
+/** How many runs the recorded SQL replayed: each replay creates its run temp table once. */
+const replays = () => sql.filter((text) => text.includes('CREATE TEMP TABLE mc_reconcile_runs'));
+
+test('a tick after a check replays only the runs whose Archon rows or lap rows changed since (AIF-160)', async () => {
+  await finishedRun();
+  const changedLap = await finishedRun();
+  const changedRun = await finishedRun();
+  expect((await run([])).out).toEqual(['reconcile: 0 run(s) repaired']);
+  expect(replays()).toHaveLength(3);
+
+  sql = [];
+  expect((await run([])).out).toEqual(['reconcile: 0 run(s) repaired']);
+  expect(replays()).toEqual([]);
+
+  await rows(`DELETE FROM mc.lap_steps WHERE run_id = $1 AND step_id = 'pick'`, [changedLap]);
+  // Archon fails the run, and the live write that would project it is dropped.
+  await rows(`UPDATE public.remote_agent_workflow_runs SET status = 'failed' WHERE id = $1`, [
+    changedRun,
+  ]);
+  await rows(`UPDATE mc.laps SET status = 'completed' WHERE run_id = $1`, [changedRun]);
+  sql = [];
+  expect((await run([])).out).toEqual(['reconcile: 2 run(s) repaired']);
+  expect(replays()).toHaveLength(2);
+  expect(await rows('SELECT status FROM mc.laps WHERE run_id = $1', [changedRun])).toEqual([
+    { status: 'failed' },
+  ]);
+  expect(
+    await rows(`SELECT 1 FROM mc.lap_steps WHERE run_id = $1 AND step_id = 'pick'`, [changedLap]),
+  ).toHaveLength(1);
+});
+
+test('a run is replayed again when the codebase it names is renamed, and its check goes when Archon deletes it (AIF-160)', async () => {
+  const [codebase] = await rows(
+    `INSERT INTO public.remote_agent_codebases (name) VALUES ('old/name') RETURNING id`,
+  );
+  const runId = await finishedRun();
+  await rows('UPDATE public.remote_agent_workflow_runs SET codebase_id = $2 WHERE id = $1', [
+    runId,
+    codebase?.id,
+  ]);
+  const gone = await finishedRun();
+  await run([]);
+  sql = [];
+  await rows(`UPDATE public.remote_agent_codebases SET name = 'new/name' WHERE id = $1`, [
+    codebase?.id,
+  ]);
+  await rows('DELETE FROM public.remote_agent_workflow_runs WHERE id = $1', [gone]);
+
+  expect((await run([])).code).toBe(0);
+  expect(replays()).toHaveLength(1);
+  expect(await rows('SELECT run_id FROM mc.lap_reconcile_checks')).toEqual([{ run_id: runId }]);
 });
 
 /** What mc.project_run records when Archon's write of `runId` loses its wait on a locked lap. */
@@ -717,6 +778,66 @@ test('a replay error no live trigger recorded fails that run alone and is report
     { status: 'completed' },
   ]);
   expect(await rows('SELECT * FROM mc.projection_errors')).toEqual([]);
+});
+
+const minutesAfter = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+test('a tick replays at most its limit, on a fresh connection every few replays, and leaves the rest to the next tick (AIF-160)', async () => {
+  for (let i = 0; i < 5; i++) await finishedRun();
+  let fresh = 0;
+  const counted: Db = {
+    ...db,
+    dropIdleConnections: async () => {
+      fresh++;
+    },
+  };
+  const bounds = { now: NOW, maxReplays: 3, replaysPerConnection: 2 };
+
+  expect(await reconcileLaps(counted, bounds)).toMatchObject({ repaired: 0, deferred: 2 });
+  expect(fresh).toBe(1);
+  // Two replays fit one connection, so the second tick needs no fresh one; the third replays none.
+  expect(await reconcileLaps(counted, bounds)).toMatchObject({ repaired: 0, deferred: 0 });
+  expect(fresh).toBe(1);
+  sql = [];
+  expect(await reconcileLaps(counted, bounds)).toMatchObject({ repaired: 0, deferred: 0 });
+  expect(fresh).toBe(1);
+});
+
+test('a run whose repair failed is parked, not replayed, until a backoff ends or it changes (AIF-160)', async () => {
+  const failing = await finishedRun(undefined, { cost_usd: 'invalid' });
+  await rows('DELETE FROM mc.projection_errors');
+  await rows(`UPDATE mc.laps SET status = 'running' WHERE run_id = $1`, [failing]);
+  const parked =
+    'reconcile: 1 run(s) parked after a failed repair, until a backoff ends or they change';
+
+  const first = await run([]);
+  expect(first.code).toBe(1);
+  expect(first.err).toEqual([
+    expect.stringContaining(`reconcile: run ${failing}: replay hit 22P02`),
+    'reconcile: 1 run(s) failed',
+  ]);
+
+  sql = [];
+  const next = await run([], 'check-abc', undefined, minutesAfter(10));
+  expect(next.code).toBe(0);
+  expect(next.out).toEqual(['reconcile: 0 run(s) repaired', parked]);
+  expect(replays()).toEqual([]);
+
+  // Past the first backoff it is tried again; failing again doubles the wait.
+  const retried = await run([], 'check-abc', undefined, minutesAfter(21));
+  expect(retried.code).toBe(1);
+  sql = [];
+  expect((await run([], 'check-abc', undefined, minutesAfter(21 + 30))).out).toEqual([
+    'reconcile: 0 run(s) repaired',
+    parked,
+  ]);
+  expect(replays()).toEqual([]);
+
+  // A change to the run brings it back at once.
+  await archonEvent(failing, 9, 'land', 'node_started');
+  sql = [];
+  expect((await run([], 'check-abc', undefined, minutesAfter(21 + 31))).code).toBe(1);
+  expect(replays()).toHaveLength(1);
 });
 
 test('a finished lap whose step output is a JSON string holding an object is repaired with that object', async () => {
