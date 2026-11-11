@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { applyFactoryConfig, DEFAULTS, parseFactoryConfig, replaceManagedPolicy } from "../../../../scripts/factory-config.ts";
@@ -118,6 +118,43 @@ triggers:
     expect(() => parseFactoryConfig("work_items: { host: linear.app }\n")).toThrow("both host and path");
     expect(() => parseFactoryConfig("work_items: { host: linear.app, path: SNIP }\n")).toThrow("WORKSPACE/TEAM");
     expect(() => parseFactoryConfig("work_items: { team: SNIP }\n")).toThrow("unknown setting");
+  });
+
+  test("deployed by Vercel: the app check needs no start command, and production is named exactly", () => {
+    const config = parseFactoryConfig([
+      "app_check: { enabled: true }",
+      "deploy: { host: vercel, production_url: https://tally.example.com, health_path: /api/health, neon_project: bold-sun-96781354 }",
+      "",
+    ].join("\n"));
+    expect(config.deploy).toEqual({ host: "vercel", production_url: "https://tally.example.com", health_path: "/api/health", timeout_minutes: 15, neon_project: "bold-sun-96781354" });
+    expect(parseFactoryConfig("project: { repo_path: example/widgets }\n").deploy.host).toBe("");
+    expect(() => parseFactoryConfig("deploy: { host: netlify }\n")).toThrow("expected one of");
+    expect(() => parseFactoryConfig("deploy: { host: vercel }\n")).toThrow("deploy.production_url");
+    expect(() => parseFactoryConfig("deploy: { host: vercel, production_url: http://tally.example.com }\n")).toThrow("https");
+    expect(() => parseFactoryConfig("deploy: { host: vercel, production_url: https://tally.example.com/app }\n")).toThrow("no path");
+    expect(() => parseFactoryConfig("deploy: { host: vercel, production_url: https://tally.example.com, health_path: health }\n")).toThrow("must start with /");
+    expect(() => parseFactoryConfig("deploy: { host: vercel, production_url: https://tally.example.com, timeout_minutes: 0 }\n")).toThrow(">= 1");
+    expect(() => parseFactoryConfig("deploy: { region: iad1 }\n")).toThrow("unknown setting");
+  });
+
+  test("the deploy check's timer is written only for a product Vercel deploys", () => {
+    const write = (deploy: Record<string, unknown> | undefined) => {
+      const root = mkdtempSync(join(tmpdir(), "factory-deploy-check-test-")), archon = join(root, ".archon");
+      mkdirSync(archon, { recursive: true });
+      writeFileSync(join(archon, "factory.yaml"), Bun.YAML.stringify({
+        project: { repo_host: "github.com", repo_path: "schieble/tally" },
+        ...(deploy ? { deploy } : {}),
+        triggers: { enabled: true, host_id: "test-host", run_as_user_id: "e58d38eaf1528395ba6abc0da3967127", deploy_check: { interval_seconds: 10800 } },
+      }));
+      applyFactoryConfig(root);
+      const path = join(archon, "triggers", "factory-deploy-check.json");
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")).binding : null;
+    };
+    const binding = write({ host: "vercel", production_url: "https://tally.example.com" });
+    expect(binding.launch.workflowName).toBe("factory-deploy-check");
+    expect(binding.launch.inputs).toEqual({ repo_path: "schieble/tally" });
+    expect(binding.resource).toBe("factory:github.com/schieble/tally:deploy-check");
+    expect(write(undefined)).toBeNull();
   });
 
   test("presets differ while managed replacement preserves surrounding prose", () => {

@@ -8,6 +8,7 @@ pending: { posted: true }
 scope: { run: true, depth: deep, reason: selected }
 policy: { ok: true, protected_files: [], description: policy clear }
 prepare: { temp: "/tmp/factory-fail", merged: bad456, prepared_at: 1000 }
+preview: { mode: local, ready: true, url: "", reason: "" }
 check:
   overall: FAIL
   lines: ["C1  FAIL  Remove does not update the list.  evidence: remove.png"]
@@ -22,5 +23,5 @@ cleanup: { cleaned: true, app_record: false, app_cleanup: stopped, teardown: non
 fixture:
   inputs: { repo_path: example/widgets, pr: "8", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, prepare, check, evidence, publish, finalize, cleanup]
+  reached: [config, select, pending, scope, policy, prepare, preview, check, evidence, publish, finalize, cleanup]
 exec-code: true

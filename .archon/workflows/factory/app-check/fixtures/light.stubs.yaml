@@ -8,6 +8,7 @@ pending: { posted: true }
 scope: { run: true, depth: light, reason: selected }
 policy: { ok: true, protected_files: [], description: policy clear }
 prepare: { temp: "/tmp/factory-pass", merged: def456, prepared_at: 1000 }
+preview: { mode: local, ready: true, url: "", reason: "" }
 check:
   overall: PASS
   lines: ["C1  PASS  The add flow works.  evidence: add.png"]
@@ -22,5 +23,5 @@ cleanup: { cleaned: true, app_record: false, app_cleanup: no-record, teardown: n
 fixture:
   inputs: { repo_path: example/widgets, pr: "7", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, prepare, check, evidence, publish, finalize, cleanup]
+  reached: [config, select, pending, scope, policy, prepare, preview, check, evidence, publish, finalize, cleanup]
 exec-code: true

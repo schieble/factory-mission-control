@@ -27,6 +27,15 @@ export interface FactoryConfig {
   protected_paths: string[];
   autonomy: AutonomyPreset;
   app: { prepare: string; start: string; port_env: string; database_env: string; health_path: string; runtime: string; teardown: string };
+  /**
+   * Our install (AIF-164): who deploys the product. Empty: nobody the factory knows of, and the
+   * app check starts the app in the container. `vercel`: Vercel's GitHub integration deploys
+   * every pull request as a preview and every merge to production. The app check then tests
+   * the pull request's preview, and `factory-deploy-check` checks that production serves the
+   * merged commit and is healthy. `neon_project` names the Neon project whose `preview/*`
+   * branches the container's sweep deletes once their pull requests close.
+   */
+  deploy: { host: "" | "vercel"; production_url: string; health_path: string; timeout_minutes: number; neon_project: string };
   models: {
     assistant: string;
     tiers: Partial<Record<"small" | "medium" | "large", ModelProfile>>;
@@ -41,6 +50,7 @@ export interface FactoryConfig {
     discoveries: ScheduleConfig;
     manager: ScheduleConfig;
     app_check: ScheduleConfig;
+    deploy_check: ScheduleConfig;
   };
 }
 
@@ -56,6 +66,7 @@ export const DEFAULTS: FactoryConfig = {
   protected_paths: [".archon/**", ".github/**", "DEPLOY.md"],
   autonomy: "standard",
   app: { prepare: "", start: "", port_env: "PORT", database_env: "", health_path: "/health", runtime: "", teardown: "" },
+  deploy: { host: "", production_url: "", health_path: "/api/health", timeout_minutes: 15, neon_project: "" },
   models: { assistant: "", tiers: {}, aliases: {} },
   triggers: {
     enabled: false,
@@ -66,13 +77,14 @@ export const DEFAULTS: FactoryConfig = {
     discoveries: { interval_seconds: 14400 },
     manager: { interval_seconds: 14400 },
     app_check: { interval_seconds: 1800 },
+    deploy_check: { interval_seconds: 10800 },
   },
 };
 
 type RecordValue = Record<string, unknown>;
 const EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"] as const;
 const TIERS = ["small", "medium", "large"] as const;
-const SCHEDULES = ["build_queue", "merge_queue", "discoveries", "manager", "app_check"] as const;
+const SCHEDULES = ["build_queue", "merge_queue", "discoveries", "manager", "app_check", "deploy_check"] as const;
 
 function fail(path: string, message: string): never { throw new Error(`Invalid factory config at ${path}: ${message}`); }
 
@@ -157,7 +169,7 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
   try { parsed = Bun.YAML.parse(raw); }
   catch (error) { throw new Error(`Invalid factory config YAML: ${error instanceof Error ? error.message : String(error)}`); }
   const root = object(parsed ?? {}, "root");
-  exact(root, ["project", "work_items", "app_check", "protected_paths", "autonomy", "app", "models", "triggers"], "root");
+  exact(root, ["project", "work_items", "app_check", "protected_paths", "autonomy", "app", "deploy", "models", "triggers"], "root");
 
   const project = section(root, "project");
   exact(project, ["repo_host", "repo_path"], "project");
@@ -167,6 +179,8 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
   exact(appCheck, ["enabled", "trigger", "frontend_paths", "depth"], "app_check");
   const app = section(root, "app");
   exact(app, ["prepare", "start", "port_env", "database_env", "health_path", "runtime", "teardown"], "app");
+  const deploy = section(root, "deploy");
+  exact(deploy, ["host", "production_url", "health_path", "timeout_minutes", "neon_project"], "deploy");
   const models = section(root, "models");
   exact(models, ["assistant", "tiers", "aliases"], "models");
   const triggers = section(root, "triggers");
@@ -198,6 +212,13 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
       runtime: string(app.runtime, DEFAULTS.app.runtime, "app.runtime"),
       teardown: string(app.teardown, DEFAULTS.app.teardown, "app.teardown"),
     },
+    deploy: {
+      host: choice(deploy.host, ["", "vercel"] as const, DEFAULTS.deploy.host, "deploy.host"),
+      production_url: string(deploy.production_url, DEFAULTS.deploy.production_url, "deploy.production_url"),
+      health_path: string(deploy.health_path, DEFAULTS.deploy.health_path, "deploy.health_path", false),
+      timeout_minutes: integer(deploy.timeout_minutes, DEFAULTS.deploy.timeout_minutes, "deploy.timeout_minutes", 1),
+      neon_project: string(deploy.neon_project, DEFAULTS.deploy.neon_project, "deploy.neon_project"),
+    },
     models: {
       assistant: string(models.assistant, DEFAULTS.models.assistant, "models.assistant"),
       tiers: profiles(models.tiers, "models.tiers", false),
@@ -212,6 +233,7 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
       discoveries: schedule(triggers.discoveries, DEFAULTS.triggers.discoveries, "triggers.discoveries"),
       manager: schedule(triggers.manager, DEFAULTS.triggers.manager, "triggers.manager"),
       app_check: schedule(triggers.app_check, DEFAULTS.triggers.app_check, "triggers.app_check"),
+      deploy_check: schedule(triggers.deploy_check, DEFAULTS.triggers.deploy_check, "triggers.deploy_check"),
     },
   };
 
@@ -220,8 +242,18 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
   if (config.work_items.path.trim() && !/^[^/\s]+\/[^/\s]+$/.test(config.work_items.path))
     fail("work_items.path", "must be WORKSPACE/TEAM (Linear) or OWNER/REPO");
   if (!config.app.health_path.startsWith("/")) fail("app.health_path", "must start with /");
-  if (config.app_check.enabled && !config.app.start.trim() && !config.app.runtime.trim())
-    fail("app.start", "or app.runtime is required when app_check.enabled is true");
+  // A product Vercel deploys is checked on its preview, so the container never starts it.
+  if (config.app_check.enabled && !config.app.start.trim() && !config.app.runtime.trim() && config.deploy.host !== "vercel")
+    fail("app.start", "or app.runtime is required when app_check.enabled is true, unless deploy.host is vercel");
+  if (config.deploy.host === "vercel") {
+    const url = config.deploy.production_url.trim();
+    if (!url) fail("deploy.production_url", "is required when deploy.host is vercel");
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { fail("deploy.production_url", "must be a URL"); }
+    if (parsed.protocol !== "https:") fail("deploy.production_url", "must be an https URL");
+    if (parsed.pathname !== "/" || parsed.search || parsed.hash || url.endsWith("/")) fail("deploy.production_url", "must be an origin with no path, such as https://tally.example.com");
+  }
+  if (!config.deploy.health_path.startsWith("/")) fail("deploy.health_path", "must start with /");
   if (config.app.runtime.trim() && !isAbsolute(config.app.runtime.replace(/^~(?=[/\\]|$)/, homedir())))
     fail("app.runtime", "must be an absolute path to the runtime instructions (or start with ~)");
   if (config.triggers.enabled) {
@@ -334,6 +366,8 @@ function triggerDefinitions(config: FactoryConfig): TimerDefinition[] {
     { key: "discoveries", workflow: "archon-discoveries", binding: "discoveries", resource: `discoveries:${repo}`, overlap: "skip", inputs, isolation: "default" },
     { key: "manager", workflow: "factory-manager", binding: "factory-manager", resource: `factory:${repo}:manager`, overlap: "skip", inputs: { repo_path: config.project.repo_path }, isolation: "default" },
     { key: "app_check", workflow: "factory-app-check", binding: "factory-app-check", resource: `factory:${repo}:app-check`, overlap: "skip", inputs: { repo_path: config.project.repo_path }, isolation: "default" },
+    // Our install (AIF-164): only a product someone deploys has a deploy to check.
+    ...(config.deploy.host ? [{ key: "deploy_check" as const, workflow: "factory-deploy-check", binding: "factory-deploy-check", resource: `factory:${repo}:deploy-check`, overlap: "skip" as const, inputs: { repo_path: config.project.repo_path }, isolation: "default" as const }] : []),
   ];
 }
 

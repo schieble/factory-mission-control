@@ -1,0 +1,8 @@
+config:
+  deploy: { host: vercel, production_url: "https://tally.example.com", health_path: /api/health, timeout_minutes: 15, neon_project: "" }
+check: { checked: true, state: success, commit: 0123456789abcdef0123456789abcdef01234567, reason: production serves 0123456 and is healthy }
+fixture:
+  inputs: { repo_path: example/tally }
+  expect: completed
+  reached: [config, check]
+exec-code: true
