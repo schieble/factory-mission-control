@@ -51,7 +51,8 @@ export function judgeProduction({ merge, tip, lookup, health, timeoutMinutes = 1
   const commit = reportedCommit(health.body);
   if (!commit) return failure('production\'s health route reports no commit: it must answer JSON with "commit" set to VERCEL_GIT_COMMIT_SHA');
   if (commit !== merge.toLowerCase()) {
-    if (tip.toLowerCase() !== merge.toLowerCase()) return { state: "superseded", reason: `superseded: ${short(tip)} was merged after it` };
+    // Only a newer merge that production already serves replaces this one; any other commit is a mismatch.
+    if (tip.toLowerCase() !== merge.toLowerCase() && commit === tip.toLowerCase()) return { state: "superseded", reason: `superseded: ${short(tip)} was merged after it` };
     return failure(`production serves ${short(commit)}, not the merge commit ${short(merge)}`);
   }
   return { state: "success", reason: `production serves ${short(merge)} and is healthy` };

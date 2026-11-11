@@ -39,12 +39,12 @@ function describe(deployment: Deployment): string {
  * address. Only when every one of them ended in failure or error has it failed; until then, none at
  * all or one still building is waited for.
  */
-function servedBy(candidates: Deployment[], none: string): Lookup {
+function servedBy(candidates: Deployment[], noneDetail: string): Lookup {
   for (const candidate of candidates) {
     const status = latest(candidate);
     if (status?.state === "success" && WEB_ADDRESS.test(status.url ?? "")) return { kind: "found", url: status.url! };
   }
-  if (!candidates.length) return { kind: "pending", detail: none };
+  if (!candidates.length) return { kind: "pending", detail: noneDetail };
   const detail = candidates.map(describe).join("; ");
   return { kind: candidates.every(candidate => ENDED.has(latest(candidate)?.state ?? "")) ? "failed" : "pending", detail };
 }

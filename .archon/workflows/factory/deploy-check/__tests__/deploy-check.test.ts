@@ -34,6 +34,8 @@ describe("a merge commit's production deploy", () => {
     const stale = { status: 200, body: JSON.stringify({ commit: NEWER }) };
     expect(judgeProduction({ merge: MERGE, tip: MERGE, lookup: found, health: stale }).state).toBe("failure");
     expect(judgeProduction({ merge: MERGE, tip: NEWER, lookup: found, health: stale })).toEqual({ state: "superseded", reason: `superseded: ${NEWER.slice(0, 7)} was merged after it` });
+    const older = { status: 200, body: JSON.stringify({ commit: "1111111111111111111111111111111111111111" }) };
+    expect(judgeProduction({ merge: MERGE, tip: NEWER, lookup: found, health: older }).state).toBe("failure");
   });
 });
 

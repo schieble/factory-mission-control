@@ -1,3 +1,6 @@
+// Our install (AIF-164): the Linux port (pidfd + /proc start time + boot id, and the helper's `launch`
+// action) from schieble/ai-software-factory linux-app-process 49b24da, offered upstream as
+// coleam00/ai-software-factory#65.
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
