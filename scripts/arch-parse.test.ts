@@ -352,6 +352,7 @@ test('stores the factory package at the commit the package records, with no hook
     'factory-app-check',
     'factory-backlog',
     'factory-deploy',
+    'factory-deploy-check',
     'factory-manager',
     'factory-setup',
   ]);

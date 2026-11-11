@@ -35,6 +35,7 @@ export function run(command: string[], options: { cwd?: string; allowFailure?: b
 }
 
 export function ghJson(args: string[]): any { const text = run(["gh", ...args]); return text ? JSON.parse(text) : null; }
+// Our install (AIF-164): "error" too, for a deploy check a newer merge superseded.
 export function postStatus(repo: string, head: string, state: "pending" | "success" | "failure" | "error", context: string, description: string): void {
   run(["gh", "api", "--method", "POST", `repos/${repo}/statuses/${head}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${description.slice(0, 140)}`]);
 }
