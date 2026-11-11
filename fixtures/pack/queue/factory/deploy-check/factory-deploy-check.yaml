@@ -1,0 +1,31 @@
+name: factory-deploy-check
+description: Check that production serves the default branch's newest commit, deployed by the product's host on its own, and is healthy; record a failed, missing or mismatched deploy as new work. Our install (AIF-164).
+inputs:
+  repo_path:
+    required: true
+    description: GitHub owner/name.
+returns: check
+worktree:
+  enabled: false
+mutates_checkout: false
+nodes:
+  - id: config
+    script: config
+    runtime: bun
+    output_format: { type: object }
+
+  # Waits for the host's production deploy up to factory.yaml deploy.timeout_minutes; deploys nothing.
+  - id: check
+    script: deploy-check
+    runtime: bun
+    depends_on: [config]
+    timeout: 5400000
+    with: { repo_path: "$INPUTS.repo_path", config: "$config.output" }
+    output_format:
+      type: object
+      properties:
+        checked: { type: boolean }
+        state: { type: string, enum: ["", success, failure, superseded] }
+        commit: { type: string }
+        reason: { type: string }
+      required: [checked, state, commit, reason]

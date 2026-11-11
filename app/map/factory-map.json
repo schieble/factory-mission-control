@@ -308,6 +308,7 @@
             "scope",
             "policy",
             "prepare",
+            "preview",
             "check",
             "evidence",
             "publish",
@@ -2202,11 +2203,11 @@
             {
               "pack": "queue",
               "workflow": "factory-app-check",
-              "steps": ["prepare"]
+              "steps": ["prepare", "preview"]
             }
           ],
           "details": {
-            "what": ["The real merge result"]
+            "what": ["The real merge result", "Or, for a product Vercel deploys, the pull request's preview"]
           }
         },
         {

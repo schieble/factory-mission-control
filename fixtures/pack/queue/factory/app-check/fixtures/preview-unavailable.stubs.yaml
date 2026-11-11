@@ -1,0 +1,24 @@
+config: &config
+  app_check: { enabled: true, trigger: always, frontend_paths: [], depth: auto }
+  protected_paths: [".archon/**"]
+  autonomy: standard
+  app: { prepare: "", start: "", port_env: PORT, database_env: "", health_path: "/health" }
+  deploy: { host: vercel, production_url: "https://tally.example.com", health_path: /api/health, timeout_minutes: 15, neon_project: "" }
+select: { found: true, pr: 7, head: abc123, files: ["app/page.tsx"], base: main, base_oid: base123, issue: 11, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-m] }
+pending: { posted: true }
+scope: { run: true, depth: normal, reason: selected }
+policy: { ok: true, protected_files: [], description: policy clear }
+prepare: { temp: "/tmp/factory-preview", merged: def456, prepared_at: 1000 }
+preview: { mode: preview, ready: false, url: "", reason: "its preview deployment failed (Preview: failure)" }
+evidence:
+  overall: FAIL
+  lines: ["C1  INCOMPLETE  The Vercel preview of abc123 is not available: its preview deployment failed (Preview: failure).  evidence: preview.json"]
+  report: "# Factory app check\nC1  INCOMPLETE  The Vercel preview of abc123 is not available: its preview deployment failed (Preview: failure).  evidence: preview.json"
+publish: { state: failure, comment: created }
+finalize: { recovered: false }
+cleanup: { cleaned: true, app_record: false, app_cleanup: no-record, teardown: none }
+fixture:
+  inputs: { repo_path: example/widgets, pr: "7", protected_grant: "" }
+  expect: completed
+  reached: [config, select, pending, scope, policy, prepare, preview, evidence, publish, finalize, cleanup]
+exec-code: true

@@ -98,10 +98,28 @@ nodes:
       properties: { temp: { type: string }, merged: { type: string }, prepared_at: { type: integer } }
       required: [temp, merged, prepared_at]
 
-  - id: check
-    command: check
+  # Our install (AIF-164): a product Vercel deploys is tested on the pull request's preview. A preview
+  # that is not available writes the check's INCOMPLETE result here, and no checker runs.
+  - id: preview
+    script: preview
+    runtime: bun
     depends_on: [prepare]
     when: "$scope.output.run == true"
+    timeout: 5400000
+    with: { config: "$config.output", repo_path: "$INPUTS.repo_path", head: "$select.output.head" }
+    output_format:
+      type: object
+      properties:
+        mode: { type: string, enum: [local, preview] }
+        ready: { type: boolean }
+        url: { type: string }
+        reason: { type: string }
+      required: [mode, ready, url, reason]
+
+  - id: check
+    command: check
+    depends_on: [prepare, preview]
+    when: "$preview.output.ready == true"
     model: ['@factory-reviewer', large]
     mutates_checkout: false
     with:
@@ -112,6 +130,7 @@ nodes:
       issue_body: "$select.output.issue_body"
       files: "$select.output.files"
       config: "$config.output"
+      preview_url: "$preview.output.url"
     output_format:
       type: object
       properties:
@@ -123,7 +142,9 @@ nodes:
   - id: evidence
     script: evidence
     runtime: bun
-    depends_on: [check, prepare]
+    depends_on: [check, prepare, preview]
+    # Our install (AIF-164): also seals the result preview wrote when no checker ran.
+    trigger_rule: none_failed_min_one_success
     with: { prepared_at: "$prepare.output.prepared_at" }
     output_format:
       type: object
@@ -153,7 +174,7 @@ nodes:
   - id: finalize
     script: finalize
     runtime: bun
-    depends_on: [select, pending, scope, policy, prepare, check, evidence, publish]
+    depends_on: [select, pending, scope, policy, prepare, preview, check, evidence, publish]
     trigger_rule: all_done
     output_format:
       type: object
@@ -163,7 +184,7 @@ nodes:
   - id: cleanup
     script: cleanup
     runtime: bun
-    depends_on: [select, scope, policy, prepare, check, evidence, publish, finalize]
+    depends_on: [select, scope, policy, prepare, preview, check, evidence, publish, finalize]
     trigger_rule: all_done
     with: { config: "$config.output" }
     output_format:
