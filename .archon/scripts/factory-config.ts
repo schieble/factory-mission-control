@@ -51,6 +51,8 @@ export interface FactoryConfig {
     manager: ScheduleConfig;
     app_check: ScheduleConfig;
     deploy_check: ScheduleConfig;
+    /** Our install (AIF-165): the weekly retro (factory-retro, in our SDLC pack). */
+    retro: ScheduleConfig;
   };
 }
 
@@ -78,13 +80,14 @@ export const DEFAULTS: FactoryConfig = {
     manager: { interval_seconds: 14400 },
     app_check: { interval_seconds: 1800 },
     deploy_check: { interval_seconds: 10800 },
+    retro: { interval_seconds: 604800 },
   },
 };
 
 type RecordValue = Record<string, unknown>;
 const EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"] as const;
 const TIERS = ["small", "medium", "large"] as const;
-const SCHEDULES = ["build_queue", "merge_queue", "discoveries", "manager", "app_check", "deploy_check"] as const;
+const SCHEDULES = ["build_queue", "merge_queue", "discoveries", "manager", "app_check", "deploy_check", "retro"] as const;
 
 function fail(path: string, message: string): never { throw new Error(`Invalid factory config at ${path}: ${message}`); }
 
@@ -234,6 +237,7 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
       manager: schedule(triggers.manager, DEFAULTS.triggers.manager, "triggers.manager"),
       app_check: schedule(triggers.app_check, DEFAULTS.triggers.app_check, "triggers.app_check"),
       deploy_check: schedule(triggers.deploy_check, DEFAULTS.triggers.deploy_check, "triggers.deploy_check"),
+      retro: schedule(triggers.retro, DEFAULTS.triggers.retro, "triggers.retro"),
     },
   };
 
@@ -368,6 +372,8 @@ function triggerDefinitions(config: FactoryConfig): TimerDefinition[] {
     { key: "app_check", workflow: "factory-app-check", binding: "factory-app-check", resource: `factory:${repo}:app-check`, overlap: "skip", inputs: { repo_path: config.project.repo_path }, isolation: "default" },
     // Our install (AIF-164): only a product someone deploys has a deploy to check.
     ...(config.deploy.host ? [{ key: "deploy_check" as const, workflow: "factory-deploy-check", binding: "factory-deploy-check", resource: `factory:${repo}:deploy-check`, overlap: "skip" as const, inputs: { repo_path: config.project.repo_path }, isolation: "default" as const }] : []),
+    // Our install (AIF-165): the retro reads the same work items as discoveries.
+    { key: "retro", workflow: "factory-retro", binding: "factory-retro", resource: `retro:${repo}`, overlap: "skip", inputs, isolation: "default" },
   ];
 }
 
