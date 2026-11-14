@@ -48,6 +48,7 @@ triggers:
   discoveries: { interval_seconds: 0 }
   manager: { interval_seconds: 900 }
   app_check: { interval_seconds: 900 }
+  retro: { interval_seconds: 0 }  # Our install (AIF-165): on by default, off here
 `);
 
     const result = applyFactoryConfig(root);
@@ -155,6 +156,23 @@ triggers:
     expect(binding.launch.inputs).toEqual({ repo_path: "schieble/tally" });
     expect(binding.resource).toBe("factory:github.com/schieble/tally:deploy-check");
     expect(write(undefined)).toBeNull();
+  });
+
+  // Our install (AIF-165): the retro is weekly by default, over the work items' repository, as discoveries.
+  test("the retro's timer is weekly by default and reads the work items' repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "factory-retro-test-")), archon = join(root, ".archon");
+    mkdirSync(archon, { recursive: true });
+    writeFileSync(join(archon, "factory.yaml"), Bun.YAML.stringify({
+      project: { repo_host: "github.com", repo_path: "schieble/tally" },
+      work_items: { host: "linear.app", path: "wrkr/TAL" },
+      triggers: { enabled: true, host_id: "test-host", run_as_user_id: "e58d38eaf1528395ba6abc0da3967127" },
+    }));
+    applyFactoryConfig(root);
+    const timer = JSON.parse(readFileSync(join(archon, "triggers", "factory-retro.json"), "utf8"));
+    expect(timer.binding.launch.workflowName).toBe("factory-retro");
+    expect(timer.binding.launch.inputs).toEqual({ repo_host: "linear.app", repo_path: "wrkr/TAL" });
+    expect(timer.binding.resource).toBe("retro:github.com/schieble/tally");
+    expect(timer.schedule.intervalSeconds).toBe(604800);
   });
 
   test("presets differ while managed replacement preserves surrounding prose", () => {
