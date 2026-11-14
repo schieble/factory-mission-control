@@ -3,12 +3,14 @@ import type { HomeMapRow, WorkOrderRow } from '../map/live';
 import {
   type BoardRow,
   type BoardSources,
+  boardFeeds,
   boardView,
   COLUMNS,
   itemOnBoard,
   KEEP_MS,
   nextChange,
   parked,
+  unavailableHint,
 } from './board';
 import type { OwnerQueueRow } from './owner-queue';
 
@@ -351,4 +353,31 @@ test('every column carries the caption the reference draws', () => {
     ['merged', 'done'],
     ['parked', 'you'],
   ]);
+});
+
+test('the Board shows without the work orders feed, and names each feed that places cards when one fails (AIF-171)', () => {
+  const ready = {
+    board: 'ready',
+    map: 'ready',
+    workable: 'ready',
+    owner: 'ready',
+    orders: 'ready',
+  } as const;
+  expect(boardFeeds(ready)).toEqual({ state: 'ready', failed: [], withoutOrders: false });
+  expect(boardFeeds({ ...ready, orders: 'error' })).toEqual({
+    state: 'ready',
+    failed: ['work orders'],
+    withoutOrders: true,
+  });
+  expect(boardFeeds({ ...ready, orders: 'error', map: 'loading' }).state).toBe('loading');
+  expect(boardFeeds({ ...ready, orders: 'loading' }).state).toBe('loading');
+  expect(boardFeeds({ ...ready, owner: 'error', orders: 'error' })).toEqual({
+    state: 'error',
+    failed: ['owner queue', 'work orders'],
+    withoutOrders: true,
+  });
+  expect(unavailableHint(['owner queue', 'work orders'])).toBe(
+    'Not answering: owner queue, work orders.',
+  );
+  expect(unavailableHint([])).toBeUndefined();
 });

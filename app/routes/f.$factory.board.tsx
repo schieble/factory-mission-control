@@ -2,11 +2,19 @@ import { type ReactElement, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { BoardBody } from '../components/Board';
 import { EmptyState } from '../components/EmptyState';
-import { type BoardRow, type BoardSources, boardView, nextChange, ORDER_PARAM } from '../lib/board';
+import {
+  type BoardRow,
+  type BoardSources,
+  boardFeeds,
+  boardView,
+  nextChange,
+  ORDER_PARAM,
+  unavailableHint,
+} from '../lib/board';
 import type { HealthWorkableRow } from '../lib/health';
 import type { OwnerQueueRow } from '../lib/owner-queue';
 import { useFactory } from '../live/FactoryProvider';
-import { AWAITED, Feed, overall, type Source } from '../live/Feed';
+import { AWAITED, Feed, type Source } from '../live/Feed';
 import type { HomeMapRow, WorkOrderRow } from '../map/live';
 
 /** The browser's clock, moved on to each moment a merged work item or a finished order drops off. */
@@ -44,16 +52,24 @@ export default function Board(): ReactElement {
       }),
     [setSearch],
   );
-  const state = overall([board.state, map.state, workable.state, owner.state, orders.state]);
+  // The work orders feed draws only the strip, so the Board shows without it (AIF-171).
+  const { state, failed, withoutOrders } = boardFeeds({
+    board: board.state,
+    map: map.state,
+    workable: workable.state,
+    owner: owner.state,
+    orders: orders.state,
+  });
+  const orderRows = withoutOrders ? [] : orders.rows;
   const sources =
-    board.rows && map.rows && workable.rows && owner.rows && orders.rows
+    board.rows && map.rows && workable.rows && owner.rows && orderRows
       ? ({
           factory: factory ?? '',
           board: board.rows,
           map: map.rows,
           workable: workable.rows,
           owner: owner.rows,
-          orders: orders.rows,
+          orders: orderRows,
         } satisfies BoardSources)
       : undefined;
   return (
@@ -65,11 +81,18 @@ export default function Board(): ReactElement {
       <Feed<OwnerQueueRow> query="owner-queue" factory={factory} into={setOwner} />
       <Feed<WorkOrderRow> query="work-orders" factory={factory} into={setOrders} />
       {state === 'error' ? (
-        <EmptyState title="Live data is unavailable." />
+        <EmptyState title="Live data is unavailable." hint={unavailableHint(failed)} />
       ) : sources === undefined ? (
         <EmptyState title="Loading the board." />
       ) : (
-        <BoardBody view={boardView(sources, now, order)} order={order} onOrder={setOrder} />
+        <>
+          {withoutOrders ? (
+            <p data-orders-unavailable className="mb-3 text-sm text-text-secondary">
+              Work orders are unavailable: their live data is not answering.
+            </p>
+          ) : null}
+          <BoardBody view={boardView(sources, now, order)} order={order} onOrder={setOrder} />
+        </>
       )}
     </main>
   );

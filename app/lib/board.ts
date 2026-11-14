@@ -373,3 +373,52 @@ export function nextChange(
     .filter((at) => at > now.getTime());
   return drops.length === 0 ? null : new Date(Math.min(...drops));
 }
+
+/** Where each of the Board's live feeds stands: loading, answered, or refused or cut off. */
+export type FeedState = 'loading' | 'ready' | 'error';
+
+/** The Board's five feeds, by what each reads. */
+export interface BoardFeedStates {
+  board: FeedState;
+  map: FeedState;
+  workable: FeedState;
+  owner: FeedState;
+  orders: FeedState;
+}
+
+/** What the Board says a feed is when it is unavailable. */
+export const FEED_NAMES: Record<keyof BoardFeedStates, string> = {
+  board: 'work items',
+  map: 'map',
+  workable: 'workable work',
+  owner: 'owner queue',
+  orders: 'work orders',
+};
+
+/**
+ * The Board's state across its feeds (AIF-171). The work orders feed draws only the strip above
+ * the columns, so the Board shows without it, naming it; every other feed places the cards, so the
+ * Board waits on it, and when one fails the Board names each feed that failed instead of showing
+ * cards in the wrong place.
+ */
+export function boardFeeds(states: BoardFeedStates): {
+  state: FeedState;
+  failed: string[];
+  withoutOrders: boolean;
+} {
+  const keys = Object.keys(FEED_NAMES) as (keyof BoardFeedStates)[];
+  const failed = keys.filter((k) => states[k] === 'error').map((k) => FEED_NAMES[k]);
+  const withoutOrders = states.orders === 'error';
+  const placing = keys.filter((k) => k !== 'orders').map((k) => states[k]);
+  const state: FeedState = placing.includes('error')
+    ? 'error'
+    : [...placing, withoutOrders ? 'ready' : states.orders].every((s) => s === 'ready')
+      ? 'ready'
+      : 'loading';
+  return { state, failed, withoutOrders };
+}
+
+/** The sentence under "Live data is unavailable." that names the feeds that failed. */
+export function unavailableHint(failed: readonly string[]): string | undefined {
+  return failed.length === 0 ? undefined : `Not answering: ${failed.join(', ')}.`;
+}
