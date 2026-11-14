@@ -12,13 +12,6 @@
       "codebase": "schieble/snip-t3",
       "console": "http://localhost:3090",
       "work_items": "linear.app/wrkr/SNIP"
-    },
-    {
-      "name": "aif164-vercel-test",
-      "repository": "schieble/aif164-vercel-test",
-      "codebase": "schieble/aif164-vercel-test",
-      "console": "http://localhost:3090",
-      "work_items": "linear.app/wrkr/TLY"
     }
   ]
 }
