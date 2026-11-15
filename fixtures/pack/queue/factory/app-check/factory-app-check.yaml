@@ -121,7 +121,8 @@ nodes:
     depends_on: [prepare, preview]
     when: "$preview.output.ready == true"
     model: ['@factory-reviewer', large]
-    mutates_checkout: false
+    # Our install (AIF-173): no node-level `mutates_checkout: false`. The engine would fail the check,
+    # and lose its verdict, for a cookie jar left in the checkout. tidy below enforces it instead.
     with:
       checkout: "$prepare.output.temp"
       merged: "$prepare.output.merged"
@@ -139,10 +140,26 @@ nodes:
         summary: { type: string }
       required: [overall, lines, summary]
 
+  # Our install (AIF-173): files the checker added to the product checkout move to app-check/stray/
+  # and the verdict stands; any other change to the checkout fails here, so nothing is published.
+  - id: tidy
+    script: tidy
+    runtime: bun
+    depends_on: [prepare, check]
+    when: "$scope.output.run == true"
+    trigger_rule: all_done
+    output_format:
+      type: object
+      properties:
+        checked: { type: boolean }
+        moved: { type: array, items: { type: string } }
+        changed: { type: array, items: { type: string } }
+      required: [checked, moved, changed]
+
   - id: evidence
     script: evidence
     runtime: bun
-    depends_on: [check, prepare, preview]
+    depends_on: [check, prepare, preview, tidy]
     # Our install (AIF-164): also seals the result preview wrote when no checker ran.
     trigger_rule: none_failed_min_one_success
     with: { prepared_at: "$prepare.output.prepared_at" }
@@ -174,7 +191,7 @@ nodes:
   - id: finalize
     script: finalize
     runtime: bun
-    depends_on: [select, pending, scope, policy, prepare, preview, check, evidence, publish]
+    depends_on: [select, pending, scope, policy, prepare, preview, check, tidy, evidence, publish]
     trigger_rule: all_done
     output_format:
       type: object
@@ -184,7 +201,7 @@ nodes:
   - id: cleanup
     script: cleanup
     runtime: bun
-    depends_on: [select, scope, policy, prepare, preview, check, evidence, publish, finalize]
+    depends_on: [select, scope, policy, prepare, preview, check, tidy, evidence, publish, finalize]
     trigger_rule: all_done
     with: { config: "$config.output" }
     output_format:

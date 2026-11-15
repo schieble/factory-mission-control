@@ -13,6 +13,8 @@ check:
   overall: PASS
   lines: ["C1  PASS  The add flow works.  evidence: add.png"]
   summary: Checked the add flow.
+# Our install (AIF-173): a cookie jar left in the checkout is moved out and the verdict still publishes.
+tidy: { checked: true, moved: [jar2.txt], changed: [] }
 evidence:
   overall: PASS
   lines: ["C1  PASS  The add flow works.  evidence: add.png"]
@@ -23,5 +25,5 @@ cleanup: { cleaned: true, app_record: false, app_cleanup: no-record, teardown: n
 fixture:
   inputs: { repo_path: example/widgets, pr: "7", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, prepare, preview, check, evidence, publish, finalize, cleanup]
+  reached: [config, select, pending, scope, policy, prepare, preview, check, tidy, evidence, publish, finalize, cleanup]
 exec-code: true

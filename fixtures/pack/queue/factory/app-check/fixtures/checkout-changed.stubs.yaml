@@ -1,0 +1,27 @@
+config: &config
+  app_check: { enabled: true, trigger: frontend, frontend_paths: ["public/**"], depth: auto }
+  protected_paths: [".archon/**"]
+  autonomy: standard
+  app: { prepare: "npm ci", start: "npm start", port_env: PORT, database_env: APP_DATABASE_PATH, health_path: "/health" }
+select: { found: true, pr: 7, head: abc123, files: ["public/app.css"], base: main, base_oid: base123, issue: 11, issue_body: "## Acceptance\n- [ ] works", issue_labels: [archon-size-m] }
+pending: { posted: true }
+scope: { run: true, depth: normal, reason: selected }
+policy: { ok: true, protected_files: [], description: policy clear }
+prepare: { temp: "/tmp/factory-pass", merged: def456, prepared_at: 1000 }
+preview: { mode: local, ready: true, url: "", reason: "" }
+check:
+  overall: PASS
+  lines: ["C1  PASS  The add flow works.  evidence: add.png"]
+  summary: Checked the add flow.
+# Our install (AIF-173): tidy refused (the checker edited a tracked file). An output that breaks
+# tidy's output_format is how a fixture fails a node, so nothing is published and the pending status
+# is recovered.
+tidy: { refused: "README.md" }
+finalize: { recovered: true }
+cleanup: { cleaned: true, app_record: false, app_cleanup: no-record, teardown: none }
+fixture:
+  inputs: { repo_path: example/widgets, pr: "7", protected_grant: "" }
+  expect: failed
+  fail-node: tidy
+  reached: [config, select, pending, scope, policy, prepare, preview, check, finalize, cleanup]
+exec-code: true

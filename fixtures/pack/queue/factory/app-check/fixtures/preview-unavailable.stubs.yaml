@@ -10,6 +10,7 @@ scope: { run: true, depth: normal, reason: selected }
 policy: { ok: true, protected_files: [], description: policy clear }
 prepare: { temp: "/tmp/factory-preview", merged: def456, prepared_at: 1000 }
 preview: { mode: preview, ready: false, url: "", reason: "its preview deployment failed (Preview: failure)" }
+tidy: { checked: true, moved: [], changed: [] }
 evidence:
   overall: FAIL
   lines: ["C1  INCOMPLETE  The Vercel preview of abc123 is not available: its preview deployment failed (Preview: failure).  evidence: preview.json"]
@@ -20,5 +21,5 @@ cleanup: { cleaned: true, app_record: false, app_cleanup: no-record, teardown: n
 fixture:
   inputs: { repo_path: example/widgets, pr: "7", protected_grant: "" }
   expect: completed
-  reached: [config, select, pending, scope, policy, prepare, preview, evidence, publish, finalize, cleanup]
+  reached: [config, select, pending, scope, policy, prepare, preview, tidy, evidence, publish, finalize, cleanup]
 exec-code: true
