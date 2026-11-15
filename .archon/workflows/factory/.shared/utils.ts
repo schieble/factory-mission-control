@@ -28,9 +28,45 @@ export function readJsonFile<T = unknown>(path: string): T {
 }
 export function emit(value: unknown): void { console.log(JSON.stringify(value)); }
 
+// Our install (AIF-172): GitHub refusing the factory's credential, as gh and git say it. The same
+// patterns are in factory-ops watcher/credential.ts and the SDLC pack's .shared/credential.ts.
+const CREDENTIAL_FAILURE = [/\bHTTP 401\b/, /\bBad credentials\b/i, /token in \w+ is invalid/i, /Failed to log in to \S+ using token/i, /Invalid username or token/i, /Authentication failed for/i];
+const refusesCredential = (text: string) => CREDENTIAL_FAILURE.some(pattern => pattern.test(text));
+
+/** GitHub refused the credential: nothing this node does on GitHub can work until it is replaced. */
+export class CredentialInvalidError extends Error {}
+
+/**
+ * Ends the node on an uncaught CredentialInvalidError with its message alone: the node fails as
+ * `credential-invalid`, not as a stack trace from this file. Installed only once one is thrown,
+ * so every other failure prints as it always did.
+ */
+let credentialExitInstalled = false;
+function installCredentialExit(): void {
+  if (credentialExitInstalled) return;
+  credentialExitInstalled = true;
+  const exit = (error: unknown) => {
+    console.error(error instanceof CredentialInvalidError ? error.message : error);
+    process.exitCode = 1;
+  };
+  process.on("uncaughtException", exit);
+  process.on("unhandledRejection", exit);
+}
+
 export function run(command: string[], options: { cwd?: string; allowFailure?: boolean } = {}): string {
   const result = Bun.spawnSync(command, { cwd: options.cwd, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0 && !options.allowFailure) throw new Error(`${command.slice(0, 3).join(" ")} failed: ${result.stderr.toString().trim()}`);
+  const stderr = result.stderr.toString().trim();
+  // Our install (AIF-172): even where a caller allows failure; no GitHub call can work after it.
+  if (result.exitCode !== 0 && refusesCredential(stderr)) {
+    installCredentialExit();
+    // The last line that says so: git's "fatal: Authentication failed", after its "remote:" line.
+    const reason = stderr.split("\n").map(line => line.trim()).reverse().find(refusesCredential) ?? stderr;
+    throw new CredentialInvalidError(
+      `credential-invalid: GitHub rejected the factory's credential (GH_TOKEN) on \`${command.slice(0, 3).join(" ")}\`: ${reason}. ` +
+        "The watcher pauses this product's queues and alerts the Operator until it is replaced.",
+    );
+  }
+  if (result.exitCode !== 0 && !options.allowFailure) throw new Error(`${command.slice(0, 3).join(" ")} failed: ${stderr}`);
   return result.stdout.toString().trim();
 }
 
