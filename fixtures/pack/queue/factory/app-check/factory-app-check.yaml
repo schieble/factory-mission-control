@@ -146,7 +146,9 @@ nodes:
     script: tidy
     runtime: bun
     depends_on: [prepare, check]
-    when: "$scope.output.run == true"
+    # Our install (AIF-172): all_done evaluates this even when scope was skipped (no pull request
+    # waits); select first, so && never reads the output scope did not write.
+    when: "$select.output.found == true && $scope.output.run == true"
     trigger_rule: all_done
     output_format:
       type: object
