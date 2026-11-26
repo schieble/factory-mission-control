@@ -115,10 +115,19 @@ triggers:
 
   test("work items default to the project repository, and need both host and path", () => {
     const config = parseFactoryConfig("project: { repo_host: github.com, repo_path: example/widgets }\n");
-    expect(config.work_items).toEqual({ host: "", path: "" });
+    expect(config.work_items).toEqual({ host: "", path: "", intake_label: "" });
     expect(() => parseFactoryConfig("work_items: { host: linear.app }\n")).toThrow("both host and path");
     expect(() => parseFactoryConfig("work_items: { host: linear.app, path: SNIP }\n")).toThrow("WORKSPACE/TEAM");
     expect(() => parseFactoryConfig("work_items: { team: SNIP }\n")).toThrow("unknown setting");
+  });
+
+  test("an intake label opts tickets in: optional, a string, and only beside work items (AIF-188)", () => {
+    expect(parseFactoryConfig("work_items: { host: linear.app, path: wrkr/WRK }\n").work_items.intake_label).toBe("");
+    const config = parseFactoryConfig("work_items: { host: linear.app, path: wrkr/WRK, intake_label: factory }\n");
+    expect(config.work_items).toEqual({ host: "linear.app", path: "wrkr/WRK", intake_label: "factory" });
+    expect(() => parseFactoryConfig("work_items: { host: linear.app, path: wrkr/WRK, intake_label: 3 }\n")).toThrow("work_items.intake_label");
+    expect(() => parseFactoryConfig("work_items: { intake_label: factory }\n")).toThrow("work_items.intake_label");
+    expect(() => parseFactoryConfig("work_items: { host: github.com, path: schieble/wrkr, intake_label: factory }\n")).toThrow("Linear");
   });
 
   test("deployed by Vercel: the app check needs no start command, and production is named exactly", () => {

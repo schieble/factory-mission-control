@@ -8,10 +8,10 @@ import { join, resolve } from "node:path";
 const SCRIPTS = resolve(import.meta.dir, "../scripts");
 
 /** A product checkout in Linear, a fake archon whose plugin numbers new issues from 20, and a gh that must not run. */
-function project() {
+function project(workItems = "{ host: linear.app, path: wrkr/SNIP }") {
   const root = mkdtempSync(join(tmpdir(), "factory-backlog-linear-"));
   mkdirSync(join(root, ".archon"), { recursive: true });
-  writeFileSync(join(root, ".archon", "factory.yaml"), "project: { repo_host: github.com, repo_path: schieble/snip }\nwork_items: { host: linear.app, path: wrkr/SNIP }\n");
+  writeFileSync(join(root, ".archon", "factory.yaml"), `project: { repo_host: github.com, repo_path: schieble/snip }\nwork_items: ${workItems}\n`);
   const artifacts = join(root, "artifacts"), log = join(root, "forge.log"), store = join(root, "issues.json"), bin = join(root, "bin");
   mkdirSync(artifacts); mkdirSync(bin);
   writeFileSync(store, "[]");
@@ -30,6 +30,8 @@ if (op === "workitem.create") {
   value = { changed: !prior, workitem: { ref: { repo: request.repo, number: issue.number }, url: url(issue.number) } };
 } else if (op === "workitem.view") {
   value = { kind: "issue", ref: request.ref, body: "PRD ".repeat(60), url: url(request.ref.number) };
+} else {
+  value = { changed: true };
 }
 process.stdout.write(JSON.stringify({ operationId: "op", ok: true, result: { op, value } }));
 `);
@@ -58,6 +60,22 @@ describe("factory-backlog in a Linear project", () => {
     expect(serve.body).toBe("<!-- factory-backlog: serve -->\nRedirect.\n\nDepends on: SNIP-20\n");
 
     expect(run("publish")).toEqual({ published: true, created: [], existing: ["https://linear.app/wrkr/issue/SNIP-20", "https://linear.app/wrkr/issue/SNIP-21"] });
+    expect(requests().filter(entry => entry.op !== "workitem.create")).toEqual([]);
+  });
+
+  test("puts the product's intake label on every ticket it publishes, so intake takes them (AIF-188)", () => {
+    const { artifacts, run, requests } = project("{ host: linear.app, path: wrkr/SNIP, intake_label: factory }");
+    writeFileSync(join(artifacts, "backlog.json"), JSON.stringify([
+      { key: "store", title: "Store links", body: "Keep links.", depends_on: [] },
+      { key: "serve", title: "Serve links", body: "Redirect.", depends_on: ["store"] },
+    ]));
+    run("publish");
+    const repo = { host: "linear.app", path: "wrkr/SNIP" };
+    expect(requests().filter(entry => entry.op !== "workitem.create")).toEqual([
+      { op: "repo.label.ensure", request: expect.objectContaining({ repo, name: "factory" }) },
+      { op: "workitem.label.add", request: { subject: { kind: "issue", ref: { repo, number: 20 } }, name: "factory" } },
+      { op: "workitem.label.add", request: { subject: { kind: "issue", ref: { repo, number: 21 } }, name: "factory" } },
+    ]);
   });
 
   test("reads a PRD issue from Linear", () => {

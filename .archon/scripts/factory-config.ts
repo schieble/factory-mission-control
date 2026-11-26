@@ -15,9 +15,11 @@ export interface FactoryConfig {
    * Our install (AIF-150): where the work items live, when not in the project's own GitHub
    * issues. A Linear team is `{ host: linear.app, path: <workspace>/<TEAM> }`. Empty means
    * the project repository. The queues take it as their repo_host/repo_path; the code, its
-   * pull requests and the app check stay in the project repository.
+   * pull requests and the app check stay in the project repository. `intake_label` (AIF-188),
+   * when set, opts tickets in: intake takes only open tickets carrying it, so the factory can
+   * share a Linear team with work it must not touch. Linear only. Empty takes every new ticket.
    */
-  work_items: { host: string; path: string };
+  work_items: { host: string; path: string; intake_label: string };
   app_check: {
     enabled: boolean;
     trigger: "always" | "frontend" | "never";
@@ -58,7 +60,7 @@ export interface FactoryConfig {
 
 export const DEFAULTS: FactoryConfig = {
   project: { repo_host: "github.com", repo_path: "" },
-  work_items: { host: "", path: "" },
+  work_items: { host: "", path: "", intake_label: "" },
   app_check: {
     enabled: false,
     trigger: "frontend",
@@ -177,7 +179,7 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
   const project = section(root, "project");
   exact(project, ["repo_host", "repo_path"], "project");
   const workItems = section(root, "work_items");
-  exact(workItems, ["host", "path"], "work_items");
+  exact(workItems, ["host", "path", "intake_label"], "work_items");
   const appCheck = section(root, "app_check");
   exact(appCheck, ["enabled", "trigger", "frontend_paths", "depth"], "app_check");
   const app = section(root, "app");
@@ -197,6 +199,7 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
     work_items: {
       host: string(workItems.host, DEFAULTS.work_items.host, "work_items.host"),
       path: string(workItems.path, DEFAULTS.work_items.path, "work_items.path"),
+      intake_label: string(workItems.intake_label, DEFAULTS.work_items.intake_label, "work_items.intake_label"),
     },
     app_check: {
       enabled: boolean(appCheck.enabled, DEFAULTS.app_check.enabled, "app_check.enabled"),
@@ -245,6 +248,8 @@ export function parseFactoryConfig(raw: string): FactoryConfig {
     fail("work_items", "needs both host and path, or neither");
   if (config.work_items.path.trim() && !/^[^/\s]+\/[^/\s]+$/.test(config.work_items.path))
     fail("work_items.path", "must be WORKSPACE/TEAM (Linear) or OWNER/REPO");
+  if (config.work_items.intake_label.trim() && config.work_items.host.trim().toLowerCase() !== "linear.app")
+    fail("work_items.intake_label", "needs Linear work items (work_items host linear.app and path)");
   if (!config.app.health_path.startsWith("/")) fail("app.health_path", "must start with /");
   // A product Vercel deploys is checked on its preview, so the container never starts it.
   if (config.app_check.enabled && !config.app.start.trim() && !config.app.runtime.trim() && config.deploy.host !== "vercel")

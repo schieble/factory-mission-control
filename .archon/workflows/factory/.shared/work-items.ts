@@ -10,13 +10,18 @@ import { join } from "node:path";
 
 export interface WorkItems { readonly host: string; readonly path: string }
 
+/** factory.yaml parsed but not validated, or null when the product has none. */
+function readFactoryYaml(path: string): unknown {
+  return existsSync(path) ? Bun.YAML.parse(readFileSync(path, "utf8")) : null;
+}
+
 /**
  * Where this project's work items live: factory.yaml's `work_items`, else its project
  * repository. Only those two keys are read, so a script that only needs to know where the
  * items are does not depend on the rest of the file (factory-config.ts validates it all).
  */
 export function workItems(path = ".archon/factory.yaml"): WorkItems {
-  const config = (existsSync(path) ? Bun.YAML.parse(readFileSync(path, "utf8")) : null) as
+  const config = readFactoryYaml(path) as
     { work_items?: { host?: unknown; path?: unknown }; project?: { repo_host?: unknown; repo_path?: unknown } } | null;
   const host = typeof config?.work_items?.host === "string" ? config.work_items.host.trim() : "";
   if (host) return { host, path: String(config?.work_items?.path ?? "").trim() };
@@ -24,6 +29,16 @@ export function workItems(path = ".archon/factory.yaml"): WorkItems {
     host: typeof config?.project?.repo_host === "string" && config.project.repo_host.trim() ? config.project.repo_host.trim() : "github.com",
     path: typeof config?.project?.repo_path === "string" ? config.project.repo_path.trim() : "",
   };
+}
+
+/**
+ * The label that opts a ticket into intake (AIF-188): factory.yaml's `work_items.intake_label`,
+ * or "" when every new ticket is the factory's.
+ */
+export function intakeLabel(path = ".archon/factory.yaml"): string {
+  const config = readFactoryYaml(path) as { work_items?: { intake_label?: unknown } } | null;
+  const label = config?.work_items?.intake_label;
+  return typeof label === "string" ? label.trim() : "";
 }
 
 export function isLinear(items: WorkItems): boolean {
@@ -79,4 +94,14 @@ export function createLinearIssue(items: WorkItems, title: string, body: string,
   const number = Number(value?.workitem?.ref?.number);
   if (!Number.isInteger(number) || number <= 0 || typeof value?.workitem?.url !== "string") throw new Error("forge workitem.create returned no issue");
   return { number, url: value.workitem.url, created: value.changed === true };
+}
+
+/** Make sure the team has `name`, so labeling with it cannot fail on a missing label. */
+export function ensureLinearLabel(items: WorkItems, name: string, description: string): void {
+  forge("repo.label.ensure", { repo: items, name, color: "0E8A16", description });
+}
+
+/** Add `name` to Linear issue `number`; a label it already carries is left as it is. */
+export function labelLinearIssue(items: WorkItems, number: number, name: string): void {
+  forge("workitem.label.add", { subject: { kind: "issue", ref: { repo: items, number } }, name });
 }
