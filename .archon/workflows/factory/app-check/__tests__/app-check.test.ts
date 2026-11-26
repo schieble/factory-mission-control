@@ -44,12 +44,22 @@ describe("app-check deterministic decisions", () => {
     expect(scopeDecision(enabled, ["public/app.css"], ["archon-size-s"]).depth).toBe("light");
   });
   test("selects a draft before delivery marks it ready and skips only a head that already has a result", () => {
-    const row = (number: number, createdAt: string, isDraft = false) => ({ number, createdAt, isDraft, headRefOid: `h${number}`, baseRefName: "main", baseRefOid: "base-a", files: [], body: "" });
+    const row = (number: number, createdAt: string, isDraft = false) => ({ number, createdAt, isDraft, headRefOid: `h${number}`, headRefName: `build/${number}-x`, isCrossRepository: false, baseRefName: "main", baseRefOid: "base-a", files: [], body: "" });
     const checked = row(1, "2026-01-01");
     expect(oldestUnchecked([row(2, "2026-02-01"), checked, row(3, "2025-01-01", true)], new Set([checked.headRefOid]))?.number).toBe(3);
     // The base moving does not bring a judged head back.
     expect(oldestUnchecked([{ ...checked, baseRefOid: "base-b" }], new Set([checked.headRefOid]))).toBeNull();
     expect(oldestUnchecked([{ ...row(4, "2024-01-01"), mergeable: "CONFLICTING" }, row(5, "2026-03-01")], new Set())?.number).toBe(5);
+  });
+  test("our install (AIF-189): the sweep takes only the factory's own build pull requests", () => {
+    const row = (number: number, createdAt: string, headRefName: string, isCrossRepository = false) => ({ number, createdAt, isDraft: false, headRefOid: `h${number}`, headRefName, isCrossRepository, baseRefName: "dev", baseRefOid: "base-a", files: [], body: "" });
+    const operators = row(1, "2024-01-01", "don/settings-tweak");
+    const forked = row(2, "2024-02-01", "build/2-from-a-fork", true);
+    const built = row(3, "2026-01-01", "build/3-business-name");
+    expect(oldestUnchecked([operators, forked, built], new Set())?.number).toBe(3);
+    expect(oldestUnchecked([operators, forked], new Set())).toBeNull();
+    // A branch merely containing "build/" is not one a build round opened.
+    expect(oldestUnchecked([row(4, "2024-01-01", "fix/build/4")], new Set())).toBeNull();
   });
   test("a result stands for its commit, whatever happens to the base", () => {
     const status = (state: string, message: string, created_at?: string) => [{ context: "factory/app-check", state, description: boundDescription("main", "base-a", message), created_at }];

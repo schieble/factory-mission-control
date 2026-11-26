@@ -3,11 +3,20 @@ import { isLinear, linkedLinearIssue, viewLinearIssue, workItems } from "../../.
 import { currentBranchOid } from "./base.ts";
 import { statusJudgesHead, type CommitStatus } from "./binding.ts";
 
-export interface Candidate { number: number; isDraft: boolean; createdAt: string; headRefOid: string; baseRefName: string; baseRefOid: string; files: { path: string }[]; body: string; state?: string; mergeable?: string }
+export interface Candidate { number: number; isDraft: boolean; createdAt: string; headRefOid: string; headRefName: string; isCrossRepository: boolean; baseRefName: string; baseRefOid: string; files: { path: string }[]; body: string; state?: string; mergeable?: string }
 type PullCandidate = Omit<Candidate, "baseRefOid"> & { baseRefOid?: string };
+// Our install (AIF-189): every build round, and every pull request the build queue adopts, opens from a
+// `build/` branch in the repository itself (the sdlc pack's BUILD_BRANCH_PREFIX). A pull request a person
+// opened is not the factory's to check unasked: its preview may hold keys that reach real people.
+const BUILD_BRANCH_PREFIX = "build/";
+function isFactoryBuilt(row: Candidate): boolean {
+  return !row.isCrossRepository && row.headRefName.startsWith(BUILD_BRANCH_PREFIX);
+}
+
+/** The scheduled pickup: the oldest open factory-built pull request with no result. An explicit `pr` bypasses this. */
 export function oldestUnchecked(rows: Candidate[], judgedHeads: Set<string>): Candidate | null {
   // A conflicting pull request cannot be merged with its base for testing; checking it first would starve every newer one.
-  return rows.filter(row => (!row.state || row.state === "OPEN") && row.mergeable !== "CONFLICTING" && !judgedHeads.has(row.headRefOid)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0] ?? null;
+  return rows.filter(row => (!row.state || row.state === "OPEN") && isFactoryBuilt(row) && row.mergeable !== "CONFLICTING" && !judgedHeads.has(row.headRefOid)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0] ?? null;
 }
 
 function hasResult(repo: string, row: Candidate): boolean {
@@ -17,7 +26,7 @@ function hasResult(repo: string, row: Candidate): boolean {
 
 if (import.meta.main) {
   const repo = env("repo_path"), requested = env("pr");
-  const fields = "number,isDraft,createdAt,headRefOid,baseRefName,baseRefOid,files,body,state,mergeable";
+  const fields = "number,isDraft,createdAt,headRefOid,headRefName,isCrossRepository,baseRefName,baseRefOid,files,body,state,mergeable";
   const pullRows = requested
     ? [ghJson(["pr", "view", requested, "--repo", repo, "--json", fields]) as PullCandidate]
     : ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", fields]) as PullCandidate[];
